@@ -44,20 +44,24 @@ if ! grep -q 'oh-my-bash/oh-my-bash.sh' "$HOME/.bashrc"; then
 fi
 
 echo "==> Instalando herdr"
-if ! command -v herdr >/dev/null; then
-  echo "  (instalacion manual de herdr requerida; ver README)"
+if ! command -v herdr >/dev/null 2>&1; then
+  curl -fsSL https://herdr.dev/install.sh | sh
 fi
+command -v herdr >/dev/null 2>&1 && echo "herdr instalado: $(herdr --version 2>/dev/null || echo ok)" || echo "herdr no disponible; instalar manualmente"
 
 echo "==> Repositorio privado (secretos/contexto)?"
-read -rp "Tienes acceso al repo privado opencode-dotfiles-private? (y/N) " privans
+read -rp "Tienes acceso al repo privado enviroment-dotfiles-secrets? (y/N) " privans
 if [ "$privans" = "y" ] || [ "$privans" = "Y" ]; then
   PRIV_DIR="$HOME/.config/opencode-private"
   if [ ! -d "$PRIV_DIR" ]; then
-    git clone "git@github.com:<USER>/opencode-dotfiles-private.git" "$PRIV_DIR" 2>/dev/null || \
-    git clone "https://github.com/<USER>/opencode-dotfiles-private.git" "$PRIV_DIR"
+    git clone "git@github.com:ChaminnPM/enviroment-dotfiles-secrets.git" "$PRIV_DIR" 2>/dev/null || \
+    git clone "https://github.com/ChaminnPM/enviroment-dotfiles-secrets.git" "$PRIV_DIR"
   fi
   cp -r "$PRIV_DIR/config/opencode/." "$OPENCODE_DIR/"
 fi
+
+echo "==> Clonar repos de trabajo?"
+read -rp "Clonar repos CenterWare? (y/N) " ans
 if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
   mkdir -p "$HOME/Centerware"
   echo "  Clona manualmente los repos cw-* en $HOME/Centerware/"

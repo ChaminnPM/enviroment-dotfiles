@@ -31,7 +31,7 @@ Migracion de configuracion de OpenCode a Linux/macOS.
 - Antes de push/pull se verifican las llaves SSH.
 
 ## Contenido
-- `config/opencode/`: config global (sin MCP figma).
+- `config/opencode/`: config global.
 - `agents/`: 8 agentes custom.
 - `skills/`: analize_webrtc_dumps, graphify, generate-test-cases, generate-tests, security-audit.
 - `plugins/`: herdr-agent-state.js, usage-limits.
