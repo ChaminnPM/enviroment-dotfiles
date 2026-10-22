@@ -62,6 +62,10 @@ echo "--- NUXIBA (Bitbucket) ---"
 cat "$HOME/.ssh/id_ed25519_nuxiba.pub"
 echo ""
 
+echo "==> Agrega las claves publicas arriba a GitHub y Bitbucket AHORA."
+read -rp "Presiona Enter cuando hayas agregado las claves para probar las conexiones..." _
+
+echo ""
 echo "==> Probando conexiones SSH..."
 ssh -T git@github.com 2>&1 || true
 ssh -T git@bitbucket-nuxiba 2>&1 || true
