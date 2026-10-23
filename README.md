@@ -12,15 +12,11 @@ Migracion de configuracion de OpenCode a Linux/macOS.
    ```bash
    git clone git@github.com:ChaminnPM/enviroment-dotfiles.git
    ```
-2. Ejecutar `scripts/setup-git-identity.sh` PRIMERO:
-   - Genera llaves SSH para personal (GitHub) y Nuxiba (Bitbucket).
-   - Muestra las claves publicas -> agregalas a GitHub/Bitbucket.
-   - Prueba conexiones SSH. NO continuar hasta que ambas pasen.
-3. Ejecutar `bootstrap.sh`:
+2. Ejecutar `bootstrap.sh` (pregunta si configurar identidad Git; Nuxiba es opcional):
    ```bash
    cd enviroment-dotfiles && bash bootstrap.sh
    ```
-4. Sincronizar:
+3. Sincronizar:
    ```bash
    bash scripts/sync.sh pull
    ```
@@ -31,7 +27,7 @@ Migracion de configuracion de OpenCode a Linux/macOS.
 - Antes de push/pull se verifican las llaves SSH.
 
 ## Contenido
-- `config/opencode/`: config global.
+- `config/opencode/`: config global (sin MCP figma).
 - `agents/`: 8 agentes custom.
 - `skills/`: analize_webrtc_dumps, graphify, generate-test-cases, generate-tests, security-audit.
 - `plugins/`: herdr-agent-state.js, usage-limits.
@@ -39,4 +35,5 @@ Migracion de configuracion de OpenCode a Linux/macOS.
 
 ## Requiere
 - git, curl, node (nvm), python3, bash.
-- herdr instalado manualmente si se usa.
+- herdr se instala automaticamente via bootstrap.sh (curl -fsSL https://herdr.dev/install.sh | sh).
+- oh-my-bash se instala automaticamente.
