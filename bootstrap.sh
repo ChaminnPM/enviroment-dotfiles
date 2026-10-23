@@ -39,10 +39,10 @@ end "Paso 1 completado"
 
 box "Paso 2: OpenCode"
 if ! command -v opencode >/dev/null; then
-  info "Usando metodo: curl"
-  curl -fsSL https://opencode.ai/install.sh | bash || { err "The OpenCode installer failed"; end "Failed"; exit 1; }
+  info "Usando metodo: curl v2"
+  curl -fsSL https://opencode.ai/v2/install | bash || { err "The OpenCode installer failed"; end "Failed"; exit 1; }
 fi
-ok "OpenCode listo"
+command -v opencode >/dev/null && ok "OpenCode: $(opencode --version 2>/dev/null || echo ok)" || { err "opencode no disponible"; end "Failed"; exit 1; }
 end "Paso 2 completado"
 
 box "Paso 3: Restaurar configuracion"

@@ -86,13 +86,14 @@ read -rp "Presiona Enter cuando hayas agregado las claves para probar las conexi
 
 echo ""
 info "Probando conexiones SSH..."
-if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+if ssh -T git@github.com 2>&1 | grep -qi "successfully authenticated"; then
   ok "GitHub OK"
 else
-  err "GitHub fallo. Verifica la clave."
+  err "GitHub fallo. Agrega la clave y reintenta."
+  exit 1
 fi
 if [ "$NUXIBA_ENABLED" = "1" ]; then
-  if ssh -T git@bitbucket-nuxiba 2>&1 | grep -q "logged in"; then
+  if ssh -T git@bitbucket-nuxiba 2>&1 | grep -qi "authenticated via ssh key"; then
     ok "Bitbucket OK"
   else
     warn "Bitbucket fallo (opcional)."
