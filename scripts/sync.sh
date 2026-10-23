@@ -6,15 +6,18 @@ OPENCODE_DIR="${OPENCODE_DIR:-$HOME/.config/opencode}"
 MODE="${1:-pull}"
 PRIV_DIR="$HOME/.config/opencode-private"
 
+# Verificar SSH (ssh -T retorna 1 incluso en exito, por eso usamos grep)
 echo "==> Verificando llaves SSH..."
-ssh -T git@github.com >/dev/null 2>&1 || { echo "SSH GitHub falla. Ejecuta setup-git-identity.sh"; exit 1; }
+if ! ssh -T git@github.com 2>&1 | grep -qi "successfully authenticated"; then
+  echo "SSH GitHub falla. Ejecuta setup-git-identity.sh"; exit 1
+fi
 
 case "$MODE" in
   pull)
     cd "$REPO_DIR" && git pull --rebase
     mkdir -p "$OPENCODE_DIR"
     cp -r "$REPO_DIR/config/opencode/." "$OPENCODE_DIR/"
-    if [ -d "$PRIV_DIR" ]; then
+    if [ -d "$PRIV_DIR" ] && [ -d "$PRIV_DIR/config/opencode" ]; then
       cd "$PRIV_DIR" && git pull --rebase
       cp -r "$PRIV_DIR/config/opencode/." "$OPENCODE_DIR/"
     fi
@@ -30,7 +33,7 @@ case "$MODE" in
     git add -A
     git commit -m "sync: $(date -Iseconds)" || echo "nada que commitear"
     git push
-    if [ -d "$PRIV_DIR" ]; then
+    if [ -d "$PRIV_DIR" ] && [ -d "$PRIV_DIR/config/opencode" ]; then
       cp -r "$OPENCODE_DIR/." "$PRIV_DIR/config/opencode/"
       cd "$PRIV_DIR" && git add -A && git commit -m "sync: $(date -Iseconds)" && git push
     fi
