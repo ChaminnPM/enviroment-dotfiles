@@ -3,10 +3,10 @@
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; N='\033[0m'
-info() { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()  { echo -e "${RED}[ERROR]${NC} $*"; }
+info() { echo -e "${BLUE}[INFO]${N} $*"; }
+ok()   { echo -e "${GREEN}[OK]${N} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${N} $*"; }
+err()  { echo -e "${RED}[ERROR]${N} $*"; }
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
@@ -73,10 +73,10 @@ fi
 
 echo ""
 info "Claves publicas (agregalas a GitHub/Bitbucket):"
-echo -e "${YELLOW}--- PERSONAL (GitHub) ---${NC}"
+echo -e "${YELLOW}--- PERSONAL (GitHub) ---${N}"
 cat "$HOME/.ssh/id_ed25519_personal.pub"
 if [ "$NUXIBA_ENABLED" = "1" ]; then
-  echo -e "${YELLOW}--- NUXIBA (Bitbucket) ---${NC}"
+  echo -e "${YELLOW}--- NUXIBA (Bitbucket) ---${N}"
   cat "$HOME/.ssh/id_ed25519_nuxiba.pub"
 fi
 echo ""
