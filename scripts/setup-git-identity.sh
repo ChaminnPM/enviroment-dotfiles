@@ -2,31 +2,28 @@
 # setup-git-identity.sh - configura identidad(es) git y prueba SSH
 set -euo pipefail
 
-# Colores
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
-info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()   { echo -e "${RED}[ERROR]${NC} $*"; }
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; N='\033[0m'
+info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+err()  { echo -e "${RED}[ERROR]${NC} $*"; }
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 
-# --- Personal (GitHub) — obligatorio ---
 info "Configurando cuenta PERSONAL (GitHub)"
-read -rp "Nombre: " P_NAME
-read -rp "Email: " P_EMAIL
+read -rp "Nombre: " P_NAME < /dev/tty
+read -rp "Email: " P_EMAIL < /dev/tty
 if [ ! -f "$HOME/.ssh/id_ed25519_personal" ]; then
   ssh-keygen -t ed25519 -C "$P_EMAIL" -f "$HOME/.ssh/id_ed25519_personal" -N "" || { err "Fallo generando llave personal"; exit 1; }
 fi
 
-# --- Nuxiba (Bitbucket) — opcional ---
 echo ""
-read -rp "Configurar cuenta NUXIBA (Bitbucket)? (y/N): " nux
+read -rp "Configurar cuenta NUXIBA (Bitbucket)? (y/N): " nux < /dev/tty
 if [ "$nux" = "y" ] || [ "$nux" = "Y" ]; then
   info "Configurando cuenta NUXIBA (Bitbucket)"
-  read -rp "Nombre: " N_NAME
-  read -rp "Email: " N_EMAIL
+  read -rp "Nombre: " N_NAME < /dev/tty
+  read -rp "Email: " N_EMAIL < /dev/tty
   if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
     ssh-keygen -t ed25519 -C "$N_EMAIL" -f "$HOME/.ssh/id_ed25519_nuxiba" -N "" || { err "Fallo generando llave nuxiba"; exit 1; }
   fi
@@ -36,7 +33,6 @@ else
   NUXIBA_ENABLED=0
 fi
 
-# SSH config
 {
   echo "Host github.com"
   echo "    HostName github.com"
@@ -54,7 +50,6 @@ fi
 } > "$HOME/.ssh/config"
 chmod 600 "$HOME/.ssh/config"
 
-# gitconfig
 cat > "$HOME/.gitconfig" <<EOF
 [includeIf "gitdir:$HOME/Documents/Repositorios/"]
     path = $HOME/.gitconfig-nuxiba
@@ -87,7 +82,7 @@ fi
 echo ""
 
 info "Agrega las claves publicas arriba a GitHub (y Bitbucket si aplica)."
-read -rp "Presiona Enter cuando hayas agregado las claves para probar las conexiones..." _
+read -rp "Presiona Enter cuando hayas agregado las claves para probar las conexiones..." _ < /dev/tty
 
 echo ""
 info "Probando conexiones SSH..."

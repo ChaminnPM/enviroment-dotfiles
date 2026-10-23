@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Colores
-R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; C='\033[0;36m'; N='\033[0m'
-
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; C='\033[0;36m'; N='\033[0m'
+info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+err()  { echo -e "${RED}[ERROR]${NC} $*"; }
 box()  { echo -e "${C}┌${N}  $*"; echo -e "${C}│${N}"; }
-ok()   { echo -e "${G}●${N}  $*"; }
-warn() { echo -e "${Y}■${N}  $*"; }
-err()  { echo -e "${R}■${N}  $*"; }
-info() { echo -e "${B}│${N}  $*"; }
 end()  { echo -e "${C}└${N}  $*"; echo; }
 
 OPENCODE_DIR="${OPENCODE_DIR:-$HOME/.config/opencode}"
@@ -18,10 +16,10 @@ box "OpenCode Bootstrap"
 
 # 0. Identidad Git
 box "Paso 0: Identidad Git (SSH)"
-read -rp "  Configurar identidad Git ahora? (y/N/skip): " gitans
+read -rp "  Configurar identidad Git ahora? (y/N/skip): " gitans < /dev/tty
 if [ "$gitans" = "y" ] || [ "$gitans" = "Y" ]; then
   info "Usando metodo: setup-git-identity.sh"
-  bash "$REPO_DIR/scripts/setup-git-identity.sh" || { err "Fallo en setup-git-identity"; end "Failed"; exit 1; }
+  bash "$REPO_DIR/scripts/setup-git-identity.sh" < /dev/tty || { err "Fallo en setup-git-identity"; end "Failed"; exit 1; }
   ok "Identidad Git configurada"
 else
   warn "Saltando configuracion de identidad Git"
@@ -31,20 +29,13 @@ end "Paso 0 completado"
 
 # 1. Dependencias
 box "Paso 1: Dependencias base"
-if ! command -v git >/dev/null; then
-  info "Instalando git, curl..."
-  sudo apt-get update && sudo apt-get install -y git curl || { err "Fallo instalando dependencias"; end "Failed"; exit 1; }
-fi
+if ! command -v git >/dev/null; then sudo apt-get update && sudo apt-get install -y git curl; fi
 if ! command -v node >/dev/null; then
-  info "Instalando node via nvm..."
   curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
   export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
   nvm install --lts || { err "Fallo instalando node"; end "Failed"; exit 1; }
 fi
-if ! command -v python3 >/dev/null; then
-  info "Instalando python3..."
-  sudo apt-get install -y python3 || { err "Fallo instalando python3"; end "Failed"; exit 1; }
-fi
+if ! command -v python3 >/dev/null; then sudo apt-get install -y python3; fi
 ok "Dependencias listas"
 end "Paso 1 completado"
 
@@ -75,7 +66,6 @@ end "Paso 4 completado"
 # 5. oh-my-bash
 box "Paso 5: oh-my-bash"
 if [ ! -d "$HOME/.oh-my-bash" ]; then
-  info "Clonando oh-my-bash..."
   git clone https://github.com/ohmybash/oh-my-bash.git "$HOME/.oh-my-bash" || { err "Fallo clonando oh-my-bash"; end "Failed"; exit 1; }
 fi
 if ! grep -q 'oh-my-bash/oh-my-bash.sh' "$HOME/.bashrc" 2>/dev/null; then
@@ -92,16 +82,12 @@ if ! command -v herdr >/dev/null 2>&1; then
   info "Usando metodo: curl"
   curl -fsSL https://herdr.dev/install.sh | sh || warn "herdr no se instalo automaticamente"
 fi
-if command -v herdr >/dev/null 2>&1; then
-  ok "herdr: $(herdr --version 2>/dev/null || echo ok)"
-else
-  warn "herdr no disponible; instalar manualmente"
-fi
+command -v herdr >/dev/null 2>&1 && ok "herdr: $(herdr --version 2>/dev/null || echo ok)" || warn "herdr no disponible"
 end "Paso 6 completado"
 
 # 7. Repo privado
 box "Paso 7: Repositorio privado (opcional)"
-read -rp "  Tienes acceso a enviroment-dotfiles-secrets? (y/N): " privans
+read -rp "  Tienes acceso a enviroment-dotfiles-secrets? (y/N): " privans < /dev/tty
 if [ "$privans" = "y" ] || [ "$privans" = "Y" ]; then
   PRIV_DIR="$HOME/.config/opencode-private"
   if [ ! -d "$PRIV_DIR" ]; then
@@ -118,12 +104,12 @@ end "Paso 7 completado"
 
 # 8. Repos de trabajo
 box "Paso 8: Repos de trabajo (opcional)"
-read -rp "  Clonar repos CenterWare? (y/N): " ans
+read -rp "  Clonar repos CenterWare? (y/N): " ans < /dev/tty
 if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
   mkdir -p "$HOME/Centerware"
   info "Clona manualmente los repos cw-* en $HOME/Centerware/"
 fi
-read -rp "  Clonar repos Slingshot/Reminder? (y/N): " ans2
+read -rp "  Clonar repos Slingshot/Reminder? (y/N): " ans2 < /dev/tty
 if [ "$ans2" = "y" ] || [ "$ans2" = "Y" ]; then
   mkdir -p "$HOME/Slingshot"
   info "Clona manualmente los repos slingshot-*/rm-slingshot-*/reminder-* en $HOME/Slingshot/"
