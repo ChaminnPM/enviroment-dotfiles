@@ -48,7 +48,6 @@ if ! command -v opencode >/dev/null; then
   for p in "$HOME/.opencode/bin" "$HOME/.local/bin" "$HOME/bin"; do
     [ -d "$p" ] && export PATH="$p:$PATH"
   done
-  [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" 2>/dev/null || true
 fi
 if command -v opencode >/dev/null; then
   ok "OpenCode: $(opencode --version 2>/dev/null || echo ok)"
@@ -77,14 +76,22 @@ box "Paso 5: oh-my-bash"
 if [ ! -d "$HOME/.oh-my-bash" ]; then
   git clone https://github.com/ohmybash/oh-my-bash.git "$HOME/.oh-my-bash" || { err "Fallo clonando oh-my-bash"; end "Failed"; exit 1; }
 fi
+# Asegurar que oh-my-bash se cargue en .bashrc (OSH_THEME antes del source)
 if ! grep -q 'oh-my-bash/oh-my-bash.sh' "$HOME/.bashrc" 2>/dev/null; then
-  echo 'export OSH="$HOME/.oh-my-bash"' >> "$HOME/.bashrc"
-  echo 'source "$OSH/oh-my-bash.sh"' >> "$HOME/.bashrc"
-  echo 'OSH_THEME="vscode"' >> "$HOME/.bashrc"
+  {
+    echo 'export OSH="$HOME/.oh-my-bash"'
+    echo 'OSH_THEME="vscode"'
+    echo 'source "$OSH/oh-my-bash.sh"'
+  } >> "$HOME/.bashrc"
+fi
+# Asegurar OSH_THEME en .bashrc si no esta
+if ! grep -q 'OSH_THEME="vscode"' "$HOME/.bashrc" 2>/dev/null; then
+  sed -i 's/^OSH_THEME=.*/OSH_THEME="vscode"/' "$HOME/.bashrc" 2>/dev/null || true
 fi
 export OSH="$HOME/.oh-my-bash"
+OSH_THEME="vscode"
 [ -f "$OSH/oh-my-bash.sh" ] && source "$OSH/oh-my-bash.sh" 2>/dev/null || true
-ok "oh-my-bash listo (tema ht)"
+ok "oh-my-bash listo (tema vscode)"
 end "Paso 5 completado"
 
 # 6. herdr
@@ -92,15 +99,28 @@ box "Paso 6: herdr"
 if ! command -v herdr >/dev/null 2>&1; then
   info "Usando metodo: curl"
   curl -fsSL https://herdr.dev/install.sh | sh || warn "herdr no se instalo automaticamente"
-  for p in "$HOME/.herdr/bin" "$HOME/.local/bin"; do
-    [ -d "$p" ] && export PATH="$p:$PATH"
-  done
+fi
+for p in "$HOME/.herdr/bin" "$HOME/.local/bin" "$HOME/.opencode/bin"; do
+  [ -d "$p" ] && export PATH="$p:$PATH"
+done
+# Persistir PATH en .bashrc
+if ! grep -q 'export PATH=.*\.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$HOME/.herdr/bin:$HOME/.opencode/bin:$PATH"' >> "$HOME/.bashrc"
 fi
 command -v herdr >/dev/null 2>&1 && ok "herdr: $(herdr --version 2>/dev/null || echo ok)" || warn "herdr no disponible"
 end "Paso 6 completado"
 
+# Persistir .bashrc en .bash_profile
+if [ -f "$HOME/.bash_profile" ]; then
+  grep -q 'source ~/.bashrc' "$HOME/.bash_profile" 2>/dev/null || echo 'source ~/.bashrc' >> "$HOME/.bash_profile"
+else
+  echo 'source ~/.bashrc' > "$HOME/.bash_profile"
+fi
+
+# Source en sesion actual
+[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc" 2>/dev/null || true
+
 echo ""
 ok "Instalacion publica completada."
-info "Recuerda: source ~/.bashrc o exec \$SHELL para aplicar PATH."
-echo 'source ~/.bashrc' >> "$HOME/.bash_profile"
+info "Si los comandos no funcionan, ejecuta: exec \$SHELL"
 end "Success"
