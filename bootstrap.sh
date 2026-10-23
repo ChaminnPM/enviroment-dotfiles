@@ -80,7 +80,7 @@ fi
 if ! grep -q 'oh-my-bash/oh-my-bash.sh' "$HOME/.bashrc" 2>/dev/null; then
   echo 'export OSH="$HOME/.oh-my-bash"' >> "$HOME/.bashrc"
   echo 'source "$OSH/oh-my-bash.sh"' >> "$HOME/.bashrc"
-  echo 'OSH_THEME="ht"' >> "$HOME/.bashrc"
+  echo 'OSH_THEME="vscode"' >> "$HOME/.bashrc"
 fi
 export OSH="$HOME/.oh-my-bash"
 [ -f "$OSH/oh-my-bash.sh" ] && source "$OSH/oh-my-bash.sh" 2>/dev/null || true
@@ -101,5 +101,6 @@ end "Paso 6 completado"
 
 echo ""
 ok "Instalacion publica completada."
-info "Para el repo privado, ejecuta: curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles-secrets/main/install.sh | bash"
+info "Recuerda: source ~/.bashrc o exec \$SHELL para aplicar PATH."
+echo 'source ~/.bashrc' >> "$HOME/.bash_profile"
 end "Success"
