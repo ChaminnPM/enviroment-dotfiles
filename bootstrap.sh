@@ -12,7 +12,7 @@ info() { echo -e "${B}│${N}  $*"; }
 end()  { echo -e "${C}└${N}  $*"; echo; }
 
 OPENCODE_DIR="${OPENCODE_DIR:-$HOME/.config/opencode}"
-REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 
 box "OpenCode Bootstrap"
 
