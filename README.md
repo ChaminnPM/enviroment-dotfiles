@@ -21,13 +21,6 @@ curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/
 - `plugins/`: herdr-agent-state.js, usage-limits.
 - `AGENTS.md`: instrucciones generales con graphify.
 
-## Repositorio privado (opcional)
-Si tienes acceso, ejecuta:
-```bash
-curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles-secrets/main/install.sh | bash
-```
-Incluye: agentes privados (engine-diagnostic, freeswitch, ozeki, tickets, analize_webrtc_dumps), memory/, nuxibaAGENTS.md.
-
 ## Sincronizacion
 - `bash scripts/sync.sh push` — sube cambios locales.
 - `bash scripts/sync.sh pull` — baja cambios del repo.
