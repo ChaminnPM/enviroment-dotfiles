@@ -2,10 +2,10 @@
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; C='\033[0;36m'; N='\033[0m'
-info() { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()  { echo -e "${RED}[ERROR]${NC} $*"; }
+info() { echo -e "${BLUE}[INFO]${N} $*"; }
+ok()   { echo -e "${GREEN}[OK]${N} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${N} $*"; }
+err()  { echo -e "${RED}[ERROR]${N} $*"; }
 box()  { echo -e "${C}┌${N}  $*"; echo -e "${C}│${N}"; }
 end()  { echo -e "${C}└${N}  $*"; echo; }
 
