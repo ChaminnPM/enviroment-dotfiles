@@ -84,4 +84,11 @@ info "Agrega las claves publicas arriba a GitHub (y Bitbucket si aplica)."
 read -rp "Presiona Enter para continuar..." _ < /dev/tty
 
 echo ""
-ok "Configuracion de identidad completada (sin validar SSH)."
+info "Ejecutando comprobacion de conexiones SSH (solo informativo)..."
+ssh -T git@github.com 2>&1 || true
+if [ "$NUXIBA_ENABLED" = "1" ]; then
+  ssh -T git@bitbucket-nuxiba 2>&1 || true
+fi
+
+echo ""
+ok "Configuracion de identidad completada."
