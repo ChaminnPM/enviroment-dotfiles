@@ -36,6 +36,7 @@ if ! command -v node >/dev/null; then
   nvm install --lts || { err "Fallo instalando node"; end "Failed"; exit 1; }
 fi
 if ! command -v python3 >/dev/null; then sudo apt-get install -y python3; fi
+export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 ok "Dependencias listas"
 end "Paso 1 completado"
 
@@ -44,7 +45,6 @@ box "Paso 2: OpenCode"
 if ! command -v opencode >/dev/null; then
   info "Usando metodo: curl v2"
   curl -fsSL https://opencode.ai/v2/install | bash || { err "The OpenCode installer failed"; end "Failed"; exit 1; }
-  # Agregar al PATH de la sesion actual
   for p in "$HOME/.opencode/bin" "$HOME/.local/bin" "$HOME/bin"; do
     [ -d "$p" ] && export PATH="$p:$PATH"
   done
@@ -80,9 +80,11 @@ fi
 if ! grep -q 'oh-my-bash/oh-my-bash.sh' "$HOME/.bashrc" 2>/dev/null; then
   echo 'export OSH="$HOME/.oh-my-bash"' >> "$HOME/.bashrc"
   echo 'source "$OSH/oh-my-bash.sh"' >> "$HOME/.bashrc"
-  echo 'OSH_THEME="catppuccin"' >> "$HOME/.bashrc"
+  echo 'OSH_THEME="ht"' >> "$HOME/.bashrc"
 fi
-ok "oh-my-bash listo"
+export OSH="$HOME/.oh-my-bash"
+[ -f "$OSH/oh-my-bash.sh" ] && source "$OSH/oh-my-bash.sh" 2>/dev/null || true
+ok "oh-my-bash listo (tema ht)"
 end "Paso 5 completado"
 
 # 6. herdr
@@ -97,51 +99,7 @@ fi
 command -v herdr >/dev/null 2>&1 && ok "herdr: $(herdr --version 2>/dev/null || echo ok)" || warn "herdr no disponible"
 end "Paso 6 completado"
 
-# 7. Repo privado
-box "Paso 7: Repositorio privado (opcional)"
-read -rp "  Tienes acceso a enviroment-dotfiles-secrets? (y/N): " privans < /dev/tty
-if [ "$privans" = "y" ] || [ "$privans" = "Y" ]; then
-  PRIV_DIR="$HOME/.config/opencode-private"
-  if [ ! -d "$PRIV_DIR" ]; then
-    info "Clonando repo privado..."
-    git clone "git@github.com:ChaminnPM/enviroment-dotfiles-secrets.git" "$PRIV_DIR" 2>/dev/null || \
-    git clone "https://github.com/ChaminnPM/enviroment-dotfiles-secrets.git" "$PRIV_DIR" || { err "Fallo clonando privado"; end "Failed"; exit 1; }
-  fi
-  if [ -d "$PRIV_DIR/config/opencode" ]; then
-    cp -r "$PRIV_DIR/config/opencode/." "$OPENCODE_DIR/" || { err "Fallo copiando privado"; end "Failed"; exit 1; }
-    ok "Privado sincronizado"
-  else
-    warn "Repo privado sin config/opencode, saltando."
-  fi
-else
-  warn "Saltando repo privado"
-fi
-end "Paso 7 completado"
-
-# 8. Repos de trabajo
-box "Paso 8: Repos de trabajo (opcional)"
-read -rp "  Clonar repos CenterWare? (y/N): " ans < /dev/tty
-if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
-  mkdir -p "$HOME/Centerware"
-  read -rp "  URL del repo CenterWare (o Enter para saltar): " cwurl < /dev/tty
-  if [ -n "$cwurl" ]; then
-    git clone "$cwurl" "$HOME/Centerware/$(basename "$cwurl" .git)" || warn "Fallo clonando CenterWare"
-  else
-    info "Clona manualmente los repos cw-* en $HOME/Centerware/"
-  fi
-fi
-read -rp "  Clonar repos Slingshot/Reminder? (y/N): " ans2 < /dev/tty
-if [ "$ans2" = "y" ] || [ "$ans2" = "Y" ]; then
-  mkdir -p "$HOME/Slingshot"
-  read -rp "  URL del repo Slingshot (o Enter para saltar): " slurl < /dev/tty
-  if [ -n "$slurl" ]; then
-    git clone "$slurl" "$HOME/Slingshot/$(basename "$slurl" .git)" || warn "Fallo clonando Slingshot"
-  else
-    info "Clona manualmente los repos slingshot-* en $HOME/Slingshot/"
-  fi
-fi
-end "Paso 8 completado"
-
 echo ""
-ok "Instalacion completada. Ejecuta 'opencode' para verificar."
+ok "Instalacion publica completada."
+info "Para el repo privado, ejecuta: curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles-secrets/main/install.sh | bash"
 end "Success"

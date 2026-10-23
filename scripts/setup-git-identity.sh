@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# setup-git-identity.sh - configura identidad(es) git y prueba SSH
+# setup-git-identity.sh - configura identidad(es) git (sin validar SSH)
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; N='\033[0m'
 info() { echo -e "${BLUE}[INFO]${N} $*"; }
 ok()   { echo -e "${GREEN}[OK]${N} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${N} $*"; }
-err()  { echo -e "${RED}[ERROR]${N} $*"; }
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
@@ -15,7 +14,7 @@ info "Configurando cuenta PERSONAL (GitHub)"
 read -rp "Nombre: " P_NAME < /dev/tty
 read -rp "Email: " P_EMAIL < /dev/tty
 if [ ! -f "$HOME/.ssh/id_ed25519_personal" ]; then
-  ssh-keygen -t ed25519 -C "$P_EMAIL" -f "$HOME/.ssh/id_ed25519_personal" -N "" || { err "Fallo generando llave personal"; exit 1; }
+  ssh-keygen -t ed25519 -C "$P_EMAIL" -f "$HOME/.ssh/id_ed25519_personal" -N "" || { echo "Fallo generando llave personal"; exit 1; }
 fi
 
 echo ""
@@ -25,7 +24,7 @@ if [ "$nux" = "y" ] || [ "$nux" = "Y" ]; then
   read -rp "Nombre: " N_NAME < /dev/tty
   read -rp "Email: " N_EMAIL < /dev/tty
   if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
-    ssh-keygen -t ed25519 -C "$N_EMAIL" -f "$HOME/.ssh/id_ed25519_nuxiba" -N "" || { err "Fallo generando llave nuxiba"; exit 1; }
+    ssh-keygen -t ed25519 -C "$N_EMAIL" -f "$HOME/.ssh/id_ed25519_nuxiba" -N "" || { echo "Fallo generando llave nuxiba"; exit 1; }
   fi
   NUXIBA_ENABLED=1
 else
@@ -73,32 +72,16 @@ fi
 
 echo ""
 info "Claves publicas (agregalas a GitHub/Bitbucket):"
-echo -e "${YELLOW}--- PERSONAL (GitHub) ---${N}"
+echo "--- PERSONAL (GitHub) ---"
 cat "$HOME/.ssh/id_ed25519_personal.pub"
 if [ "$NUXIBA_ENABLED" = "1" ]; then
-  echo -e "${YELLOW}--- NUXIBA (Bitbucket) ---${N}"
+  echo "--- NUXIBA (Bitbucket) ---"
   cat "$HOME/.ssh/id_ed25519_nuxiba.pub"
 fi
 echo ""
 
 info "Agrega las claves publicas arriba a GitHub (y Bitbucket si aplica)."
-read -rp "Presiona Enter cuando hayas agregado las claves para probar las conexiones..." _ < /dev/tty
+read -rp "Presiona Enter para continuar..." _ < /dev/tty
 
 echo ""
-info "Probando conexiones SSH..."
-if ssh -T git@github.com 2>&1 | grep -qi "successfully authenticated"; then
-  ok "GitHub OK"
-else
-  err "GitHub fallo. Agrega la clave y reintenta."
-  exit 1
-fi
-if [ "$NUXIBA_ENABLED" = "1" ]; then
-  if ssh -T git@bitbucket-nuxiba 2>&1 | grep -qi "authenticated via ssh key"; then
-    ok "Bitbucket OK"
-  else
-    warn "Bitbucket fallo (opcional)."
-  fi
-fi
-
-echo ""
-ok "Configuracion de identidad completada."
+ok "Configuracion de identidad completada (sin validar SSH)."
