@@ -1,39 +1,37 @@
-# enviroment-dotfiles
+# enviroment-dotfiles (publico)
 
-Migracion de configuracion de OpenCode a Linux/macOS.
+Configuracion portable de OpenCode para Linux/macOS.
 
-## Repositorios
-- Publico: `ChaminnPM/enviroment-dotfiles`
-- Privado: `ChaminnPM/enviroment-dotfiles-secrets`
+## One-liner
+```bash
+curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh | bash
+```
 
-## Orden de ejecucion (IMPORTANTE)
-
-1. Clonar el repo publico:
-   ```bash
-   git clone git@github.com:ChaminnPM/enviroment-dotfiles.git
-   ```
-2. Ejecutar `bootstrap.sh` (pregunta si configurar identidad Git; Nuxiba es opcional):
-   ```bash
-   cd enviroment-dotfiles && bash bootstrap.sh
-   ```
-3. Sincronizar:
+## Orden de ejecucion
+1. Ejecutar el one-liner (pregunta si configurar identidad Git; Nuxiba es opcional).
+2. Sincronizar:
    ```bash
    bash scripts/sync.sh pull
    ```
 
-## Sincronizacion entre maquinas
-- `bash scripts/sync.sh push` — sube cambios locales al repo.
-- `bash scripts/sync.sh pull` — baja cambios del repo al entorno.
-- Antes de push/pull se verifican las llaves SSH.
-
-## Contenido
+## Contenido publico
 - `config/opencode/`: config global (sin MCP figma).
-- `agents/`: 8 agentes custom.
-- `skills/`: analize_webrtc_dumps, graphify, generate-test-cases, generate-tests, security-audit.
+- `agents/`: net-qa, react-qa, lua-qa.
+- `skills/`: graphify, generate-test-cases, generate-tests, security-audit.
 - `plugins/`: herdr-agent-state.js, usage-limits.
-- `memory/` (repo privado): reportes CenterWare y Reminder.
+- `AGENTS.md`: instrucciones generales con graphify.
+
+## Repositorio privado (opcional)
+Si tienes acceso, ejecuta:
+```bash
+curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles-secrets/main/install.sh | bash
+```
+Incluye: agentes privados (engine-diagnostic, freeswitch, ozeki, tickets, analize_webrtc_dumps), memory/, nuxibaAGENTS.md.
+
+## Sincronizacion
+- `bash scripts/sync.sh push` — sube cambios locales.
+- `bash scripts/sync.sh pull` — baja cambios del repo.
 
 ## Requiere
 - git, curl, node (nvm), python3, bash.
-- herdr se instala automaticamente via bootstrap.sh (curl -fsSL https://herdr.dev/install.sh | sh).
-- oh-my-bash se instala automaticamente.
+- herdr y oh-my-bash se instalan automaticamente.
