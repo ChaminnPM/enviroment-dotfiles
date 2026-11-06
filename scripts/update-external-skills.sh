@@ -35,14 +35,19 @@ PY
 
 check_graphify() {
   local version_file="$SKILLS_DIR/graphify/VERSION.json"
-  local current latest_tag latest_main
+  local current vendored latest_tag latest_main
   current="$(read_version_field "$version_file" "upstream_ref")"
+  vendored="$(read_version_field "$version_file" "vendored_ref")"
   latest_tag="$(git ls-remote --tags https://github.com/Graphify-Labs/graphify.git 2>/dev/null | awk '{print $2}' | sed 's#refs/tags/##' | grep -v '\^{}' | sort -V | tail -n1)"
   latest_main="$(git ls-remote https://github.com/Graphify-Labs/graphify.git refs/heads/main 2>/dev/null | awk '{print $1}')"
   ui_title "graphify"
-  ui_info "Vendored ref : ${current:-?}"
+  ui_info "Upstream ref : ${current:-?}"
+  ui_info "Vendored ref : ${vendored:-?}"
   ui_info "Ultimo tag   : ${latest_tag:-?}"
   ui_info "main HEAD    : ${latest_main:-?}"
+  if [[ "$vendored" == custom* ]]; then
+    ui_warn "La copia local es personalizada (references/). Revisar diff y estabilidad antes de actualizar."
+  fi
   if [[ -n "$latest_tag" && "$current" != "$latest_tag" ]]; then
     ui_warn "Hay una version nueva (tag $latest_tag). Revisar estabilidad antes de actualizar."
     if [[ "$MODE" == "update" ]] && ui_ask "Actualizar graphify a $latest_tag?"; then
