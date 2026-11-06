@@ -2,34 +2,34 @@
 # setup-git-identity.sh - configura identidad(es) git (sin validar SSH)
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; N='\033[0m'
-info() { echo -e "${BLUE}[INFO]${N} $*"; }
-ok()   { echo -e "${GREEN}[OK]${N} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${N} $*"; }
+REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+# shellcheck source=lib/ui.sh
+source "$REPO_DIR/scripts/lib/ui.sh"
+
+ui_title "Identidad Git"
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 
-info "Configurando cuenta PERSONAL (GitHub)"
-read -rp "Nombre: " P_NAME < /dev/tty
-read -rp "Email: " P_EMAIL < /dev/tty
+ui_section "Cuenta PERSONAL (GitHub)"
+P_NAME="$(ui_input "Nombre:" "Tu nombre")"
+P_EMAIL="$(ui_input "Email:" "tu@email.com")"
 if [ ! -f "$HOME/.ssh/id_ed25519_personal" ]; then
-  ssh-keygen -t ed25519 -C "$P_EMAIL" -f "$HOME/.ssh/id_ed25519_personal" -N "" || { echo "Fallo generando llave personal"; exit 1; }
+  ssh-keygen -t ed25519 -C "$P_EMAIL" -f "$HOME/.ssh/id_ed25519_personal" -N "" || { ui_error "Fallo generando llave personal"; exit 1; }
 fi
 
 echo ""
-read -rp "Configurar cuenta NUXIBA (Bitbucket)? (y/N): " nux < /dev/tty
-if [ "$nux" = "y" ] || [ "$nux" = "Y" ]; then
-  info "Configurando cuenta NUXIBA (Bitbucket)"
-  read -rp "Nombre: " N_NAME < /dev/tty
-  read -rp "Email: " N_EMAIL < /dev/tty
+NUXIBA_ENABLED=0
+if ui_ask "Configurar cuenta NUXIBA (Bitbucket)?"; then
+  ui_section "Cuenta NUXIBA (Bitbucket)"
+  N_NAME="$(ui_input "Nombre:" "Tu nombre Nuxiba")"
+  N_EMAIL="$(ui_input "Email:" "tu@nuxiba.com")"
   if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
-    ssh-keygen -t ed25519 -C "$N_EMAIL" -f "$HOME/.ssh/id_ed25519_nuxiba" -N "" || { echo "Fallo generando llave nuxiba"; exit 1; }
+    ssh-keygen -t ed25519 -C "$N_EMAIL" -f "$HOME/.ssh/id_ed25519_nuxiba" -N "" || { ui_error "Fallo generando llave nuxiba"; exit 1; }
   fi
   NUXIBA_ENABLED=1
 else
-  warn "Saltando cuenta Nuxiba (opcional)."
-  NUXIBA_ENABLED=0
+  ui_warn "Saltando cuenta Nuxiba (opcional)."
 fi
 
 {
@@ -71,7 +71,7 @@ EOF
 fi
 
 echo ""
-info "Claves publicas (agregalas a GitHub/Bitbucket):"
+ui_info "Claves publicas (agregalas a GitHub/Bitbucket):"
 echo "--- PERSONAL (GitHub) ---"
 cat "$HOME/.ssh/id_ed25519_personal.pub"
 if [ "$NUXIBA_ENABLED" = "1" ]; then
@@ -80,15 +80,19 @@ if [ "$NUXIBA_ENABLED" = "1" ]; then
 fi
 echo ""
 
-info "Agrega las claves publicas arriba a GitHub (y Bitbucket si aplica)."
-read -rp "Presiona Enter para continuar..." _ < /dev/tty
+ui_info "Agrega las claves publicas arriba a GitHub (y Bitbucket si aplica)."
+if command -v gum >/dev/null 2>&1; then
+  gum input --placeholder "Presiona Enter para continuar..." >/dev/null || true
+else
+  read -rp "Presiona Enter para continuar..." _ < /dev/tty
+fi
 
 echo ""
-info "Ejecutando comprobacion de conexiones SSH (solo informativo)..."
+ui_info "Ejecutando comprobacion de conexiones SSH (solo informativo)..."
 ssh -T git@github.com 2>&1 || true
 if [ "$NUXIBA_ENABLED" = "1" ]; then
   ssh -T git@bitbucket-nuxiba 2>&1 || true
 fi
 
 echo ""
-ok "Configuracion de identidad completada."
+ui_ok "Configuracion de identidad completada."
