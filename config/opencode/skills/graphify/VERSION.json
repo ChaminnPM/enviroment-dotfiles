@@ -1,0 +1,9 @@
+{
+  "source": "https://github.com/Graphify-Labs/graphify",
+  "license": "Ver repositorio upstream",
+  "upstream_ref": "v1.0.0",
+  "upstream_ref_type": "tag",
+  "vendored_ref": "custom-715-line-skill",
+  "notes": "Copia local con referencias adicionales (references/). El SKILL.md local puede diferir del upstream; usar scripts/update-external-skills.sh check antes de actualizar y validar que las referencias sigan vigentes.",
+  "dependencies": ["python3", "networkx", "pypdf", "python-docx", "git"]
+}

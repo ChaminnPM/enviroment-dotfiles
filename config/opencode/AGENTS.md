@@ -6,6 +6,9 @@ Este proyecto usa graphify para analisis de codigo. Si el repositorio actual NO 
 - Trigger: `/graphify`
 - Skill: `~/.config/opencode/skills/graphify/SKILL.md`
 
+## Escritura de skills y agents
+Al crear o revisar skills/agents, seguir la guia multiplataforma (vale para Claude Code, OpenCode o cualquier entorno): `~/.config/opencode/memory/skills-best-practices.md` — reglas de uso, permisos minimos y patron de salida en cada uno; concision, description que-hace + cuando en tercera persona, principal < 500 lineas, referencias a un nivel, evals antes de documentar.
+
 ## Convenciones generales
 - Usar herramientas dedicadas antes que shell.
 - Preferir graphify para consultas estructurales (que llama a que, impacto, definicion).

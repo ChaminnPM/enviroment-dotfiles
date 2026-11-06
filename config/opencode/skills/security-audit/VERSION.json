@@ -1,0 +1,9 @@
+{
+  "source": "https://github.com/cloudflare/security-audit-skill",
+  "license": "Ver repositorio upstream",
+  "upstream_ref": "c1c8a8c1471069fb0e188eeaff69b8e8db6564a8",
+  "upstream_ref_type": "commit",
+  "vendored_ref": "up-to-date (solo diferencias de CRLF)",
+  "notes": "Contenido sincronizado con main. Ejecutar node validate-findings.test.cjs y node validate-coverage-ledger.test.cjs tras actualizar.",
+  "dependencies": ["node"]
+}
