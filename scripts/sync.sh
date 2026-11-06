@@ -44,7 +44,7 @@ sync_path() {
 
 ui_title "Sync público"
 
-if ! ssh -T git@github.com 2>&1 | grep -qi "successfully authenticated"; then
+if ! { ssh -T git@github.com 2>&1 || true; } | grep -qi "successfully authenticated"; then
   ui_error "SSH GitHub falla. Ejecuta setup-git-identity.sh"
   exit 1
 fi
@@ -55,7 +55,7 @@ case "$MODE" in
     for rel in "${PUBLIC_PATHS[@]}"; do
       sync_path "$rel" "$REPO_DIR/config/opencode/$rel" "$OPENCODE_DIR/$rel"
     done
-    ( cd "$OPENCODE_DIR" && npm install )
+    ( cd "$OPENCODE_DIR" && npm install ) || ui_warn "npm install fallo; revisa node_modules manualmente"
     ui_ok "sincronizado (pull público)"
     ;;
   push)
