@@ -11,6 +11,7 @@ Al crear o revisar skills/agents, seguir la guia multiplataforma (vale para Clau
 
 ## Convenciones generales
 - Usar herramientas dedicadas antes que shell.
+- Diagnostico re-INVITE / corte RTP / WebRTC: guia en `~/.opencode/scripts/diagnose/GUIA_diagnostico_voz.md`; memoria operativa en `~/.config/opencode/memory/nuxiba/reinvite-rtp-gap-diagnostico.md`; no estimar gaps con `tail` de tshark.
 - Preferir graphify para consultas estructurales (que llama a que, impacto, definicion).
 - Para diagnosticos de logs usar scripts especializados.
 - No leer logs manualmente.
