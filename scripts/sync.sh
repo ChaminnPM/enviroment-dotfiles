@@ -6,6 +6,12 @@ set -euo pipefail
 OPENCODE_DIR="${OPENCODE_DIR:-$HOME/.config/opencode}"
 MODE="${1:-pull}"
 
+# Verificar git antes de clonar/sincronizar
+if ! command -v git >/dev/null 2>&1; then
+  printf '\033[0;31m[ERROR]\033[0m git no está instalado. Ejecuta bootstrap.sh o instala git.\n' >&2
+  exit 1
+fi
+
 # Si no hay repo local valido, clonar en temporal y limpiar al salir.
 if [ -z "${REPO_DIR:-}" ] || [ ! -d "${REPO_DIR}/.git" ]; then
   _EPHEMERAL_REPO="$(mktemp -d)"

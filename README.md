@@ -6,6 +6,7 @@ Configuracion portable de OpenCode para Linux/macOS.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh | bash
 ```
+El one-liner descarga el repo como tarball (no requiere git). El bootstrap instala `git`, `gum` y el resto de dependencias antes de los pasos que los necesitan.
 
 ## Orden de ejecucion
 1. Ejecutar el one-liner (pregunta si configurar identidad Git; Nuxiba es opcional).
