@@ -3,9 +3,16 @@
 # Los assets privados (Nuxiba) se gestionan con sync-private.sh del repo privado.
 set -euo pipefail
 
-REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 OPENCODE_DIR="${OPENCODE_DIR:-$HOME/.config/opencode}"
 MODE="${1:-pull}"
+
+# Si no hay repo local valido, clonar en temporal y limpiar al salir.
+if [ -z "${REPO_DIR:-}" ] || [ ! -d "${REPO_DIR}/.git" ]; then
+  _EPHEMERAL_REPO="$(mktemp -d)"
+  trap 'rm -rf "$_EPHEMERAL_REPO"' EXIT
+  git clone --depth 50 https://github.com/ChaminnPM/enviroment-dotfiles.git "$_EPHEMERAL_REPO" >/dev/null 2>&1
+  REPO_DIR="$_EPHEMERAL_REPO"
+fi
 
 # shellcheck source=lib/ui.sh
 source "$REPO_DIR/scripts/lib/ui.sh"

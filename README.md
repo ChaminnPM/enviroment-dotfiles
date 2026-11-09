@@ -33,9 +33,14 @@ bash scripts/update-external-skills.sh update
 ```
 
 ## Sincronizacion
-- `bash scripts/sync.sh push` — sube solo assets publicos.
-- `bash scripts/sync.sh pull` — baja solo assets publicos.
-- Los assets privados (Nuxiba) se gestionan con `sync-private.sh` del repo privado.
+La instalacion no deja repos locales. Usa los wrappers (instalados en `~/.local/bin`):
+- `sync-dotfiles push` — sube solo assets publicos.
+- `sync-dotfiles pull` — baja solo assets publicos.
+- `sync-dotfiles-private push` — sube solo assets privados (Nuxiba).
+- `sync-dotfiles-private pull` — baja solo assets privados.
+- Alternativa sin wrappers: `bash <(curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/scripts/sync.sh) pull`.
+
+Los assets privados (Nuxiba) se gestionan con `sync-private.sh` del repo privado.
 
 ## Requiere
 - git, curl, bash, python3, node (nvm), npm, rsync, openssh-client, xdg-utils.

@@ -168,6 +168,15 @@ if ! grep -q 'export PATH=.*\.local/bin' "$HOME/.bashrc" 2>/dev/null; then
 fi
 command -v herdr >/dev/null 2>&1 && ui_ok "herdr: $(herdr --version 2>/dev/null || echo ok)" || ui_warn "herdr no disponible"
 
+# Instalar wrapper de sincronizacion (sin repo local persistente)
+mkdir -p "$HOME/.local/bin"
+cat > "$HOME/.local/bin/sync-dotfiles" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec bash <(curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/scripts/sync.sh) "$@"
+EOF
+chmod +x "$HOME/.local/bin/sync-dotfiles"
+
 # Persistir .bashrc en .bash_profile
 if [ -f "$HOME/.bash_profile" ]; then
   grep -q 'source ~/.bashrc' "$HOME/.bash_profile" 2>/dev/null || echo 'source ~/.bashrc' >> "$HOME/.bash_profile"
