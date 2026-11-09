@@ -309,5 +309,6 @@ ui_seed_known_hosts() {
 ui_ssh_test() {
   local title="$1" target="$2"
   ui_seed_known_hosts
-  ui_logged "$title" "ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 '$target' >/dev/null 2>&1"
+  # GitHub/Bitbucket devuelven exit 1 incluso autenticando bien: evaluar por mensaje.
+  ui_logged "$title" "out=\$(ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 '$target' 2>&1 || true); printf '%s\n' \"\$out\"; printf '%s\n' \"\$out\" | grep -Eiq 'successfully authenticated|logged in as'"
 }
