@@ -69,7 +69,7 @@ sync_path() {
 ui_clear
 ui_banner "Sync publico"
 
-if ! { ssh -T git@github.com 2>&1 || true; } | grep -qi "successfully authenticated"; then
+if ! ui_ssh_test "Validando GitHub SSH..." git@github.com; then
   ui_error "SSH GitHub falla. Ejecuta setup-git-identity.sh"
   exit 1
 fi

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# ui.sh - helpers de UI con gum, spinners, logs y fallback portable.
-# Uso: source "$(dirname "$0")/lib/ui.sh"
+# ui.sh - helpers de UI con gum dinámico, spinners, logs, anchos y fallback portable.
 
 LOG_DIR="${LOG_DIR:-$HOME/.local/state/enviroment-dotfiles/logs}"
 export VERBOSE="${VERBOSE:-0}"
@@ -9,64 +8,182 @@ ensure_log_dir() {
   mkdir -p "$LOG_DIR" 2>/dev/null || true
 }
 
+ui_gum_available() {
+  command -v gum >/dev/null 2>&1
+}
+
+ui_width() {
+  local cols
+  cols="$(tput cols 2>/dev/null || true)"
+  if [ -z "$cols" ]; then
+    cols="$(stty size 2>/dev/null | awk '{print $2}' || true)"
+  fi
+  cols="${cols:-80}"
+  cols=$((cols - 2))
+  if [ "$cols" -lt 44 ]; then
+    cols=44
+  fi
+  printf '%s' "$cols"
+}
+
+ui_wrap() {
+  local width="$1"
+  shift
+  local inner=$((width - 6))
+  [ "$inner" -lt 24 ] && inner=24
+  printf '%s\n' "$*" | fold -s -w "$inner" || true
+}
+
 ui_clear() {
   if [ -t 1 ] && [ "${VERBOSE:-0}" != "1" ]; then
     clear >/dev/null 2>&1 || true
   fi
 }
 
-if command -v gum >/dev/null 2>&1; then
-  ui_banner()  { ensure_log_dir; gum style --foreground 212 --border-foreground 212 --border double --align center --width 72 --margin "1 0" --padding "0 1" "$*"; }
-  ui_title()   { gum style --border double --border-foreground 212 --align center --padding "0 2" --margin "1 0" "$*"; }
-  ui_section() { gum style --foreground 212 --bold --padding "0 1" "$*"; }
-  ui_info()    { [ "${VERBOSE:-0}" = "1" ] && gum log --level info "$*" || true; }
-  ui_ok()      { gum log --level info "$*"; }
-  ui_warn()    { gum log --level warn "$*"; }
-  ui_error()   { gum log --level error "$*"; }
-  ui_ask()     { gum confirm "$*"; }
-  ui_input()   { gum input --placeholder "$2" --prompt "$1 "; }
-  ui_choose()  { local prompt="$1"; shift; if [ -t 0 ]; then printf '%s\n' "$@" | gum choose --no-limit --height 12 --header "$prompt" || true; fi; }
-  ui_spin()    { local title="$1"; shift; gum spin --spinner moon --title "$title" -- "$@"; }
-  ui_tail_error() {
-    local title="$1" log="$2"
-    ensure_log_dir
+ui_banner() {
+  ensure_log_dir
+  local w text
+  w="$(ui_width)"
+  text="$(ui_wrap "$w" "$*")"
+  if ui_gum_available; then
+    gum style --foreground 212 --border-foreground 212 --border double --align center --width "$w" --margin "1 0" --padding "0 1" "$text"
+  else
+    printf '\n\033[1;36m%s\033[0m\n' "NUXIBA ENVIRONMENT"
+    printf '%s\n' "$text"
+  fi
+}
+
+ui_step_start() {
+  local step="$1"
+  local title="$2"
+  ui_clear
+  ui_banner "🎀 NUXIBA ENVIRONMENT" "$step: $title"
+}
+
+ui_step_done() {
+  ui_ok "$*"
+  if [ "${VERBOSE:-0}" != "1" ] && [ -t 1 ]; then
+    sleep 0.35
+  fi
+}
+
+ui_title() {
+  local w text
+  w="$(ui_width)"
+  text="$(ui_wrap "$w" "$*")"
+  if ui_gum_available; then
+    gum style --border double --border-foreground 212 --align center --width "$w" --padding "0 2" --margin "1 0" "$text"
+  else
+    printf '\n== %s ==\n' "$text"
+  fi
+}
+
+ui_section() {
+  local w text
+  w="$(ui_width)"
+  text="$(ui_wrap "$w" "$*")"
+  if ui_gum_available; then
+    gum style --foreground 39 --bold --width "$w" --padding "0 1" "$text"
+  else
+    printf '%s\n' "$text"
+  fi
+}
+
+ui_info() {
+  if [ "${VERBOSE:-0}" = "1" ]; then
+    if ui_gum_available; then gum log --level info "$*"; else printf '[INFO] %s\n' "$*"; fi
+  fi
+}
+
+ui_ok() {
+  if ui_gum_available; then gum log --level info "$*"; else printf '[OK] %s\n' "$*"; fi
+}
+
+ui_warn() {
+  if ui_gum_available; then gum log --level warn "$*"; else printf '[WARN] %s\n' "$*"; fi
+}
+
+ui_error() {
+  if ui_gum_available; then gum log --level error "$*"; else printf '[ERROR] %s\n' "$*"; fi
+}
+
+ui_dim() {
+  if ui_gum_available; then gum style --foreground 240 "$*"; else printf '%s\n' "$*"; fi
+}
+
+ui_ask() {
+  if ui_gum_available && [ -t 0 ]; then
+    gum confirm "$*"
+  elif [ -t 0 ]; then
+    local a
+    read -rp "$* [y/N]: " a
+    [[ "${a,,}" == y* ]]
+  else
+    return 1
+  fi
+}
+
+ui_input() {
+  if ui_gum_available && [ -t 0 ]; then
+    gum input --placeholder "${2:-}" --prompt "$1 "
+  elif [ -t 0 ]; then
+    local v
+    read -rp "$1 " v
+    printf '%s' "$v"
+  else
+    printf '%s' "${GIT_PROMPT_DEFAULT:-}"
+  fi
+}
+
+ui_choose() {
+  local prompt="$1"
+  shift
+  if ui_gum_available && [ -t 0 ]; then
+    printf '%s\n' "$@" | gum choose --no-limit --height 12 --header "$prompt" || true
+  elif [ -t 0 ]; then
+    printf '%s\n' "$@"
+    read -rp "Escribe separados por espacio (o Enter para omitir): " sel
+    printf '%s\n' $sel
+  fi
+}
+
+ui_tail_error() {
+  local title="$1" log="$2"
+  local w
+  ensure_log_dir
+  w="$(ui_width)"
+  local tail=""
+  if [ -f "$log" ]; then
+    tail="$(tail -n 15 "$log" 2>/dev/null || true)"
+    tail="$(ui_wrap "$w" "$title
+Log: $log
+$tail")"
+  else
+    tail="$(ui_wrap "$w" "$title
+Log no disponible: $log")"
+  fi
+
+  if ui_gum_available; then
+    gum style --border rounded --foreground 196 --border-foreground 196 --width "$w" --padding "1 2" "$tail"
+  else
+    printf '\n[ERROR] %s\n' "$title"
+    printf 'Log: %s\n' "$log"
     if [ -f "$log" ]; then
-      gum style --border rounded --foreground 196 --border-foreground 196 --padding "1 2" \
-        "Fallo: $title" \
-        "Log: $log" \
-        "$(tail -n 15 "$log" 2>/dev/null)"
-    else
-      gum style --border rounded --foreground 196 --border-foreground 196 --padding "1 2" \
-        "Fallo: $title" \
-        "Log no disponible: $log"
+      tail -n 15 "$log" || true
     fi
-  }
-  ui_summary() {
-    gum style --border rounded --border-foreground 48 --foreground 48 --align center --padding "1 3" --margin "1 0" "✨ $*"
-  }
-  ui_dim() { gum style --foreground 240 "$*"; }
-else
-  ui_banner()  { printf '\n\033[1;36m============================================================\033[0m\n\033[1;36m%s\033[0m\n\033[1;36m============================================================\033[0m\n' "$*"; }
-  ui_title()   { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
-  ui_section() { printf '\033[1;36m%s\033[0m\n' "$*"; }
-  ui_info()    { [ "${VERBOSE:-0}" = "1" ] && printf '\033[0;34m[INFO]\033[0m %s\n' "$*" || true; }
-  ui_ok()      { printf '\033[0;32m[OK]\033[0m %s\n' "$*"; }
-  ui_warn()    { printf '\033[1;33m[WARN]\033[0m %s\n' "$*"; }
-  ui_error()   { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*"; }
-  ui_ask()     { local a; if [ -t 0 ]; then read -rp "$* [y/N]: " a; [[ "${a,,}" == y* ]]; else return 1; fi; }
-  ui_input()   { local v; if [ -t 0 ]; then read -rp "$1 " v; else v="${GIT_PROMPT_DEFAULT:-}"; fi; printf '%s' "$v"; }
-  ui_choose()  { local prompt="$1"; shift; if [ -t 0 ]; then echo "$prompt:"; printf '  %s\n' "$@"; read -rp "Escribe separados por espacio (o Enter para omitir): " sel; printf '%s\n' $sel; fi; }
-  ui_spin()    { local title="$1"; shift; printf '%s...\n' "$title"; "$@"; }
-  ui_tail_error() {
-    local title="$1" log="$2"
-    ensure_log_dir
-    printf '\033[0;31m[ERROR]\033[0m %s\n' "$title"
-    printf '\033[0;34m[INFO]\033[0m Log: %s\n' "$log"
-    [ -f "$log" ] && tail -n 15 "$log" || true
-  }
-  ui_summary() { printf '\033[0;32m%s\033[0m\n' "$*"; }
-  ui_dim() { printf '\033[0;37m%s\033[0m\n' "$*"; }
-fi
+  fi
+}
+
+ui_summary() {
+  local w text
+  w="$(ui_width)"
+  text="$(ui_wrap "$w" "$*")"
+  if ui_gum_available; then
+    gum style --border rounded --border-foreground 48 --foreground 48 --align center --width "$w" --padding "1 3" --margin "1 0" "$text"
+  else
+    printf '\n%s\n' "$text"
+  fi
+}
 
 ui_logged() {
   local title="$1" cmd="$2"
@@ -79,7 +196,7 @@ ui_logged() {
     return $?
   fi
 
-  if command -v gum >/dev/null 2>&1 && [ -t 1 ]; then
+  if ui_gum_available && [ -t 1 ]; then
     if gum spin --spinner moon --title "$title" -- bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
       return 0
     else
@@ -96,13 +213,17 @@ ui_logged() {
   fi
 }
 
+ui_apt_prefix() {
+  if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    printf 'sudo '
+  fi
+}
+
 ui_ensure_cmd() {
   local cmd="$1" pkg="${2:-$1}"
   command -v "$cmd" >/dev/null 2>&1 && return 0
-  local apt_prefix=""
-  if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
-    apt_prefix="sudo "
-  fi
+  local apt_prefix
+  apt_prefix="$(ui_apt_prefix)"
   ui_logged "Instalando $pkg..." "${apt_prefix}apt-get update >/dev/null 2>&1 || true; ${apt_prefix}apt-get install -y $pkg >/dev/null 2>&1"
 }
 
@@ -151,4 +272,28 @@ ui_install_gum() {
     rm -rf "$tmp"
     return 1
   fi
+}
+
+ui_seed_known_hosts() {
+  local host tmp_known
+  mkdir -p "$HOME/.ssh" 2>/dev/null || true
+  chmod 700 "$HOME/.ssh" 2>/dev/null || true
+  touch "$HOME/.ssh/known_hosts" 2>/dev/null || true
+  tmp_known="$(mktemp)"
+  for host in github.com bitbucket.org; do
+    ssh-keyscan -t ed25519,rsa "$host" >> "$tmp_known" 2>/dev/null || true
+  done
+  if [ -s "$tmp_known" ]; then
+    sort -u "$HOME/.ssh/known_hosts" "$tmp_known" > "${tmp_known}.sorted" 2>/dev/null || true
+    if [ -s "${tmp_known}.sorted" ]; then
+      cat "${tmp_known}.sorted" > "$HOME/.ssh/known_hosts" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$tmp_known" "${tmp_known}.sorted" 2>/dev/null || true
+}
+
+ui_ssh_test() {
+  local title="$1" target="$2"
+  ui_seed_known_hosts
+  ui_logged "$title" "ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 '$target' >/dev/null 2>&1"
 }
