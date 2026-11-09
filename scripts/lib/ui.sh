@@ -72,22 +72,56 @@ ui_install_ui() {
     fi
   fi
 
+  # Importante: no usar ui_logged (spinner de nui) ni escribir directamente
+  # sobre $dest, porque ese binario puede estar en ejecucion (ETXTBSY).
+  # Se arma en un temporal y se reemplaza con mv.
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/nui.XXXXXX")" || return 1
+  ui_info "Instalando nui${want:+ $want}..."
+
   if [ -f "$localgz" ]; then
     # repo local: instalar sin red
-    if ! ui_logged "Instalando nui..." "mkdir -p '$HOME/.local/bin' && gzip -dc '$localgz' > '$dest' && chmod 755 '$dest'"; then
+    if ! gzip -dc "$localgz" > "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      ui_error "No se pudo descomprimir nui desde el repo local"
       return 1
     fi
   else
-    ui_ensure_cmd curl curl || return 1
-    ui_ensure_cmd gzip gzip || return 1
+    ui_ensure_cmd curl curl || { rm -f "$tmp"; return 1; }
+    ui_ensure_cmd gzip gzip || { rm -f "$tmp"; return 1; }
     local url="$NUI_BASE_URL/bin/nui-$UI_OS-$UI_ARCH.gz"
-    if ! ui_logged "Instalando nui..." "mkdir -p '$HOME/.local/bin' && curl -fsSL '$url' -o '$dest.gz' && gzip -dc '$dest.gz' > '$dest' && chmod 755 '$dest' && rm -f '$dest.gz'"; then
+    if ! curl -fsSL "$url" -o "$tmp.gz" 2>/dev/null; then
+      rm -f "$tmp" "$tmp.gz"
+      ui_error "No se pudo descargar nui desde $url"
       return 1
     fi
+    if ! gzip -dc "$tmp.gz" > "$tmp" 2>/dev/null; then
+      rm -f "$tmp" "$tmp.gz"
+      ui_error "No se pudo descomprimir nui"
+      return 1
+    fi
+    rm -f "$tmp.gz"
+  fi
+
+  if ! chmod 755 "$tmp" || ! mkdir -p "$HOME/.local/bin" || ! mv -f "$tmp" "$dest"; then
+    rm -f "$tmp"
+    ui_error "No se pudo instalar nui en $dest"
+    return 1
   fi
   export PATH="$HOME/.local/bin:$PATH"
   export UI_BIN="$dest"
-  ui_have
+  ui_ok "nui $("$(ui_bin)" version 2>/dev/null | awk 'NR==1{print $2}') instalado"
+  return 0
+}
+
+# ui_supports_steps: nui >= 0.2.0 (subcomando 'steps run').
+ui_supports_steps() {
+  local v
+  v="$("$(ui_bin)" version 2>/dev/null | awk 'NR==1{print $2}')"
+  case "$v" in
+    0.2.*|0.[3-9].*|[1-9]*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 ui_install_gum() { ui_install_ui; } # compat
 
@@ -611,7 +645,7 @@ PY
   local rc=0 verbose_plain="$plain"
   [ "${VERBOSE:-0}" = "1" ] && verbose_plain=1
 
-  if ui_have && ui_interactive; then
+  if ui_have && ui_interactive && ui_supports_steps; then
     local extra=()
     [ "$verbose_plain" = "1" ] && extra+=(--plain)
     if "$(ui_bin)" steps run --plan "$plan" --log-dir "$LOG_DIR" --title "$title" \
