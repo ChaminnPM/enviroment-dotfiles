@@ -20,59 +20,16 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+ui_install_gum || true
+export PATH="$HOME/.local/bin:$PATH"
+
+ui_clear
+ui_banner "NUXIBA ENVIRONMENT" "🎀 OpenCode Bootstrap 🎀"
+
 APT_PREFIX=""
 if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
   APT_PREFIX="sudo "
 fi
-
-ensure_cmd() {
-  local cmd="$1" pkg="${2:-$1}"
-  command -v "$cmd" >/dev/null 2>&1 && return 0
-  ui_logged "Instalando $pkg..." "${APT_PREFIX}apt-get update >/dev/null 2>&1 || true; ${APT_PREFIX}apt-get install -y $pkg >/dev/null 2>&1"
-}
-
-install_gum() {
-  command -v gum >/dev/null 2>&1 && return 0
-  ensure_cmd curl curl || return 1
-  ensure_cmd tar tar || return 1
-  ensure_cmd gzip gzip || return 1
-  ensure_cmd python3 python3 || true
-
-  local os arch tag url tmp
-  os="$(uname -s)"
-  arch="$(uname -m)"
-  case "$os" in
-    Linux) os="Linux" ;;
-    Darwin) os="Darwin" ;;
-    *) return 1 ;;
-  esac
-  case "$arch" in
-    x86_64|amd64) arch="x86_64" ;;
-    aarch64|arm64) arch="arm64" ;;
-    *) return 1 ;;
-  esac
-
-  local api
-  api="$(curl -fsSL https://api.github.com/repos/charmbracelet/gum/releases/latest 2>/dev/null || true)"
-  if command -v python3 >/dev/null 2>&1; then
-    tag="$(printf '%s' "$api" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
-  else
-    tag="$(printf '%s' "$api" | grep -o '"tag_name": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
-  fi
-  [ -n "$tag" ] || return 1
-
-  url="https://github.com/charmbracelet/gum/releases/download/${tag}/gum_${tag#v}_${os}_${arch}.tar.gz"
-  tmp="$(mktemp -d)"
-  ui_logged "Instalando gum..." "curl -fsSL '$url' -o '$tmp/gum.tar.gz' && tar -xzf '$tmp/gum.tar.gz' -C '$tmp' && mkdir -p '$HOME/.local/bin' && install -m 0755 '$tmp/gum' '$HOME/.local/bin/gum'"
-  rm -rf "$tmp"
-  command -v gum >/dev/null 2>&1 || return 1
-}
-
-install_gum || true
-export PATH="$HOME/.local/bin:$PATH"
-
-ui_clear
-ui_banner "NUXIBA ENVIRONMENT" "OpenCode Bootstrap"
 
 # 1. Dependencias base (git antes de los pasos que lo requieren)
 ui_section "Paso 1: Dependencias base"

@@ -16,9 +16,9 @@ ui_clear() {
 }
 
 if command -v gum >/dev/null 2>&1; then
-  ui_banner()  { ensure_log_dir; gum style --foreground 212 --border-foreground 212 --border double --align center --width 62 --margin "1 0" --padding "0 1" "$*"; }
+  ui_banner()  { ensure_log_dir; gum style --foreground 212 --border-foreground 212 --border double --align center --width 72 --margin "1 0" --padding "0 1" "$*"; }
   ui_title()   { gum style --border double --border-foreground 212 --align center --padding "0 2" --margin "1 0" "$*"; }
-  ui_section() { gum style --foreground 212 --bold "$*"; }
+  ui_section() { gum style --foreground 212 --bold --padding "0 1" "$*"; }
   ui_info()    { [ "${VERBOSE:-0}" = "1" ] && gum log --level info "$*" || true; }
   ui_ok()      { gum log --level info "$*"; }
   ui_warn()    { gum log --level warn "$*"; }
@@ -26,7 +26,7 @@ if command -v gum >/dev/null 2>&1; then
   ui_ask()     { gum confirm "$*"; }
   ui_input()   { gum input --placeholder "$2" --prompt "$1 "; }
   ui_choose()  { local prompt="$1"; shift; if [ -t 0 ]; then printf '%s\n' "$@" | gum choose --no-limit --height 12 --header "$prompt" || true; fi; }
-  ui_spin()    { local title="$1"; shift; gum spin --spinner line --title "$title" -- "$@"; }
+  ui_spin()    { local title="$1"; shift; gum spin --spinner moon --title "$title" -- "$@"; }
   ui_tail_error() {
     local title="$1" log="$2"
     ensure_log_dir
@@ -42,7 +42,7 @@ if command -v gum >/dev/null 2>&1; then
     fi
   }
   ui_summary() {
-    gum style --border rounded --border-foreground 48 --foreground 48 --padding "1 2" --margin "1 0" "$*"
+    gum style --border rounded --border-foreground 48 --foreground 48 --align center --padding "1 3" --margin "1 0" "✨ $*"
   }
   ui_dim() { gum style --foreground 240 "$*"; }
 else
@@ -80,7 +80,7 @@ ui_logged() {
   fi
 
   if command -v gum >/dev/null 2>&1 && [ -t 1 ]; then
-    if gum spin --spinner line --title "$title" -- bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
+    if gum spin --spinner moon --title "$title" -- bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
       return 0
     else
       ui_tail_error "$title" "$log"
@@ -93,5 +93,61 @@ ui_logged() {
       ui_tail_error "$title" "$log"
       return 1
     fi
+  fi
+}
+
+ui_ensure_cmd() {
+  local cmd="$1" pkg="${2:-$1}"
+  command -v "$cmd" >/dev/null 2>&1 && return 0
+  local apt_prefix=""
+  if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    apt_prefix="sudo "
+  fi
+  ui_logged "Instalando $pkg..." "${apt_prefix}apt-get update >/dev/null 2>&1 || true; ${apt_prefix}apt-get install -y $pkg >/dev/null 2>&1"
+}
+
+ui_install_gum() {
+  command -v gum >/dev/null 2>&1 && return 0
+  ui_ensure_cmd curl curl || return 1
+  ui_ensure_cmd tar tar || return 1
+  ui_ensure_cmd gzip gzip || return 1
+
+  local os arch api tag url tmp gum_bin
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Linux) os="Linux" ;;
+    Darwin) os="Darwin" ;;
+    *) return 1 ;;
+  esac
+  case "$arch" in
+    x86_64|amd64) arch="x86_64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) return 1 ;;
+  esac
+
+  api="$(curl -fsSL https://api.github.com/repos/charmbracelet/gum/releases/latest 2>/dev/null || true)"
+  if command -v python3 >/dev/null 2>&1; then
+    tag="$(printf '%s' "$api" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
+  else
+    tag="$(printf '%s' "$api" | grep -o '"tag_name": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
+  fi
+  [ -n "$tag" ] || tag="v2.0.2"
+
+  url="https://github.com/charmbracelet/gum/releases/download/${tag}/gum_${tag#v}_${os}_${arch}.tar.gz"
+  tmp="$(mktemp -d)"
+  if ! ui_logged "Instalando gum..." "curl -fsSL '$url' -o '$tmp/gum.tar.gz' && tar -xzf '$tmp/gum.tar.gz' -C '$tmp'"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  gum_bin="$(find "$tmp" -type f -name gum -print -quit 2>/dev/null || true)"
+  if [ -n "$gum_bin" ]; then
+    ui_logged "Instalando gum..." "mkdir -p '$HOME/.local/bin' && install -m 0755 '$gum_bin' '$HOME/.local/bin/gum'" || { rm -rf "$tmp"; return 1; }
+    export PATH="$HOME/.local/bin:$PATH"
+    command -v gum >/dev/null 2>&1
+  else
+    rm -rf "$tmp"
+    return 1
   fi
 }
