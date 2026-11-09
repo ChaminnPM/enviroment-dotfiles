@@ -1,0 +1,4 @@
+*
+!*.gz
+!VERSION
+!.gitignore

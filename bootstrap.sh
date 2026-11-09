@@ -23,15 +23,15 @@ done
 
 APT_PREFIX="$(ui_apt_prefix)"
 
-ui_install_gum || true
+ui_install_ui || true
 export PATH="$HOME/.local/bin:$PATH"
 
-# Paso 0: preflight / gum
+# Paso 0: preflight / nui (bubbletea)
 ui_step_start "Paso 0" "Preparando instalador"
-if ui_gum_available; then
-  ui_ok "gum disponible"
+if ui_have; then
+  ui_ok "nui disponible"
 else
-  ui_warn "gum no disponible; usando modo texto"
+  ui_warn "nui no disponible; usando modo texto"
 fi
 ui_step_done "Instalador listo"
 
@@ -58,8 +58,7 @@ if [ ${#APT_PKGS[@]} -gt 0 ]; then
 fi
 
 if ! command -v git >/dev/null 2>&1; then
-  ui_error "Se requiere git para continuar."
-  exit 1
+  ui_fatal "Se requiere git para continuar."
 fi
 ui_step_done "Dependencias base listas"
 
@@ -109,7 +108,7 @@ fi
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
 if ! command -v node >/dev/null 2>&1; then
-  ui_logged "Instalando Node LTS..." "export NVM_DIR='$HOME/.nvm'; . '$NVM_DIR/nvm.sh' >/dev/null 2>&1; nvm install --lts >/dev/null 2>&1" || { ui_error "Fallo instalando node"; exit 1; }
+  ui_logged "Instalando Node LTS..." "export NVM_DIR='$HOME/.nvm'; . '$NVM_DIR/nvm.sh' >/dev/null 2>&1; nvm install --lts >/dev/null 2>&1" || ui_fatal "Fallo instalando node"
   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
 fi
 ui_step_done "Node listo ($(node --version 2>/dev/null || echo '?'))"
@@ -118,7 +117,7 @@ ui_step_done "Node listo ($(node --version 2>/dev/null || echo '?'))"
 ui_step_start "Paso 5" "OpenCode"
 if ! command -v opencode >/dev/null 2>&1; then
   tmp_oc="$(mktemp)"
-  ui_logged "Instalando OpenCode..." "curl -fsSL https://opencode.ai/v2/install -o '$tmp_oc' && bash '$tmp_oc' --no-modify-path </dev/null >/dev/null 2>&1; rm -f '$tmp_oc'" || { ui_error "The OpenCode installer failed"; exit 1; }
+  ui_logged "Instalando OpenCode..." "curl -fsSL https://opencode.ai/v2/install -o '$tmp_oc' && bash '$tmp_oc' --no-modify-path </dev/null >/dev/null 2>&1; rm -f '$tmp_oc'" || ui_fatal "The OpenCode installer failed"
 else
   ui_dim "OpenCode ya estaba instalado"
 fi
@@ -155,7 +154,7 @@ fi
 # 8. oh-my-bash
 ui_step_start "Paso 8" "oh-my-bash"
 if [ ! -d "$HOME/.oh-my-bash" ]; then
-  ui_logged "Clonando oh-my-bash..." "git clone https://github.com/ohmybash/oh-my-bash.git '$HOME/.oh-my-bash' >/dev/null 2>&1" || { ui_error "Fallo clonando oh-my-bash"; exit 1; }
+  ui_logged "Clonando oh-my-bash..." "git clone https://github.com/ohmybash/oh-my-bash.git '$HOME/.oh-my-bash' >/dev/null 2>&1" || ui_fatal "Fallo clonando oh-my-bash"
 fi
 if ! grep -q 'oh-my-bash/oh-my-bash.sh' "$HOME/.bashrc" 2>/dev/null; then
   {
@@ -220,4 +219,6 @@ fi
 [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc" >/dev/null 2>&1 || true
 
 ui_clear
-ui_summary "Instalacion publica completada" "Comandos: sync-dotfiles pull/push" "Logs: $LOG_DIR" "Ejecuta: exec \$SHELL"
+report_info "Comandos: sync-dotfiles pull/push"
+report_info "Ejecuta: exec \$SHELL"
+ui_report

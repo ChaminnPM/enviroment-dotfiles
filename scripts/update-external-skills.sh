@@ -7,20 +7,9 @@ MODE="${1:-check}"
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 SKILLS_DIR="$REPO_DIR/config/opencode/skills"
 
-# UI con gum + fallback
-if command -v gum >/dev/null 2>&1; then
-  ui_title() { gum style --border double --border-foreground 212 --padding "0 2" --margin "1 0" "$*"; }
-  ui_info()  { gum log --level info "$*"; }
-  ui_warn()  { gum log --level warn "$*"; }
-  ui_ok()    { gum log --level info "$*"; }
-  ui_ask()   { gum confirm "$*"; }
-else
-  ui_title() { printf '\n== %s ==\n' "$*"; }
-  ui_info()  { printf '[INFO] %s\n' "$*"; }
-  ui_warn()  { printf '[WARN] %s\n' "$*"; }
-  ui_ok()    { printf '[OK] %s\n' "$*"; }
-  ui_ask()   { read -rp "$* [y/N]: " a; [[ "${a,,}" == y* ]]; }
-fi
+# UI: nui (bubbletea) via ui.sh, con fallback textual.
+# shellcheck source=lib/ui.sh
+source "$REPO_DIR/scripts/lib/ui.sh"
 
 # Lee un campo de VERSION.json sin requerir jq
 read_version_field() {

@@ -70,8 +70,7 @@ ui_clear
 ui_banner "Sync publico"
 
 if ! ui_ssh_test "Validando GitHub SSH..." git@github.com; then
-  ui_error "SSH GitHub falla. Ejecuta setup-git-identity.sh"
-  exit 1
+  ui_fatal "SSH GitHub falla. Ejecuta setup-git-identity.sh"
 fi
 
 case "$MODE" in
@@ -91,7 +90,7 @@ case "$MODE" in
     rm -f "$REPO_DIR/config/opencode/service.json"
     rm -rf "$REPO_DIR/config/opencode/node_modules"
     ui_logged "Commit publico..." "cd '$REPO_DIR' && git add -A && git commit -m 'sync: $(date -Iseconds)' >/dev/null 2>&1" || ui_dim "Nada que commitear"
-    ui_logged "Push publico..." "cd '$REPO_DIR' && git push >/dev/null 2>&1" || { ui_error "No se pudo subir al repo publico"; exit 1; }
+    ui_logged "Push publico..." "cd '$REPO_DIR' && git push >/dev/null 2>&1" || ui_fatal "No se pudo subir al repo publico"
     ui_summary "Sincronizado (push publico)" "Repo publico actualizado"
     ;;
   *)

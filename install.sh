@@ -26,25 +26,24 @@ quiet_run() {
     eval "$cmd"
     return $?
   fi
-  if command -v gum >/dev/null 2>&1 && [ -t 1 ]; then
-    if gum spin --spinner moon --title "$title" -- bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
+  # si nui ya esta disponible de una corrida anterior, usar su spinner
+  if command -v nui >/dev/null 2>&1 && [ -t 1 ]; then
+    if nui spin --title "$title" -- bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
       return 0
-    else
-      printf '\033[0;31m[ERROR]\033[0m %s\n' "$title" >&2
-      printf '\033[0;34m[INFO]\033[0m Log: %s\n' "$log" >&2
-      [ -f "$log" ] && tail -n 10 "$log" >&2 || true
-      return 1
     fi
-  else
-    if bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
-      return 0
-    else
-      printf '\033[0;31m[ERROR]\033[0m %s\n' "$title" >&2
-      printf '\033[0;34m[INFO]\033[0m Log: %s\n' "$log" >&2
-      [ -f "$log" ] && tail -n 10 "$log" >&2 || true
-      return 1
-    fi
+    printf '\033[0;31m[ERROR]\033[0m %s\n' "$title" >&2
+    printf 'Log: %s\n' "$log" >&2
+    [ -f "$log" ] && tail -n 15 "$log" >&2 || true
+    return 1
   fi
+  if bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
+    printf '\033[0;32m[OK]\033[0m %s\n' "$title"
+    return 0
+  fi
+  printf '\033[0;31m[ERROR]\033[0m %s\n' "$title" >&2
+  printf 'Log: %s\n' "$log" >&2
+  [ -f "$log" ] && tail -n 15 "$log" >&2 || true
+  return 1
 }
 
 ensure_cmd() {

@@ -15,7 +15,7 @@ El one-liner descarga el repo como **tarball** y no requiere `git` para empezar.
 3. Ejecutar `bootstrap.sh`.
 4. `bootstrap.sh`:
    - Instala `git` y dependencias base si faltan.
-   - Instala `gum` si falta y muestra banners/spinners con gum.
+   - Instala `nui` (binario propio con [bubbletea](https://github.com/charmbracelet/bubbletea)) si falta y muestra banners/spinners con `nui`.
    - Configura identidad Git por defecto. Para omitirla:
      ```bash
      SKIP_GIT_IDENTITY=1 bash bootstrap.sh
@@ -82,14 +82,16 @@ bash scripts/sync.sh push
 
 ## Requiere
 - Base: `git`, `curl`, `bash`, `python3`, `node` (nvm), `npm`, `rsync`, `openssh-client`, `xdg-utils`, `tar`, `gzip`.
-- `gum`: se instala automaticamente si falta.
+- `nui`: binario estatico propio (bubbletea + lipgloss) que se instala automaticamente desde `bin/nui-<os>-<arch>.gz` (o `NUI_BASE_URL`).
 - `herdr` y `oh-my-bash`: se instalan automaticamente.
 
 ## Comportamiento visual
-- La UI es dinámica: si `gum` se instala durante el bootstrap, el resto de pasos ya usan banners, spinners, cajas y resúmenes con `gum`.
-- Cada paso comienza limpiando pantalla y muestra solo el paso actual, con salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH redirigida a logs.
-- Las cajas se ajustan al ancho de la terminal (`tput cols`/`stty size`, con fallback).
-- Las claves publicas se muestran por fingerprint y archivo; la clave completa puede verse con `gum pager`.
+- La UI usa `nui` (binario propio en Go construido con bubbletea/lipgloss; fuente en `ui/`, binarios en `bin/`). Si `nui` no esta disponible, hay fallback textual/ANSI.
+- Cada paso limpia la pantalla anterior (`ESC[3J`) y muestra solo el paso actual (max ~6 lineas), con salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH redirigida a logs.
+- Al terminar se muestra un **reporte final**: secciones `INSTALADO`, `AVISOS` y `ERRORES` (exit 1 si hay errores). Errores fatales (`ui_fatal`) muestran el reporte y salen.
+- Las cajas se ajustan al ancho de la terminal.
+- Las claves publicas se muestran por fingerprint y archivo; la clave completa puede verse con `nui pager`.
+- Los prompts (input/confirm/choose) resuelven TTY via `/dev/tty`, por lo que funcionan con `curl | bash`.
 
 ## Modo verbose
 Por defecto el instalador oculta el ruido de `apt-get`, `npm`, `git clone`, OpenCode y herdr, guardando logs en:
@@ -105,8 +107,8 @@ sync-dotfiles pull --verbose
 sync-dotfiles push --verbose
 ```
 
-El one-liner inicial usa un fallback silencioso antes de tener `gum`; cuando `gum` ya esta disponible muestra banners, spinners, prompts y resúmenes.
+El one-liner inicial usa un fallback silencioso antes de tener `nui`; cuando `nui` ya esta disponible muestra banners, spinners, prompts y reporte final.
 
-- Los scripts usan `gum` para mejorar legibilidad y tienen fallback textual/ANSI.
+- Los scripts usan `nui` para mejorar legibilidad y tienen fallback textual/ANSI.
 - `analyze-webrtc-dumps` es un **agente**, no una skill.
 - El repo publico no debe contener assets Nuxiba privados.

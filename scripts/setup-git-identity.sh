@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-git-identity.sh - configura identidad(es) git con UI gum.
+# setup-git-identity.sh - configura identidad(es) git con UI nui (bubbletea).
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -7,11 +7,11 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 source "$REPO_DIR/scripts/lib/ui.sh"
 ensure_log_dir
 
-# Prompt con gum si hay TTY; env/default como fallback no interactivo.
+# Prompt con nui si hay TTY; env/default como fallback no interactivo.
 _ask() {
   local prompt="$1" env_name="$2" default="${3:-}" value=""
-  if ui_gum_available && [ -t 0 ]; then
-    value="$(gum input --placeholder "$default" --prompt "$prompt ")"
+  if ui_have; then
+    value="$(ui_input "$prompt" "$default")" || value=""
   elif [ -t 0 ]; then
     read -rp "$prompt " value
   fi
@@ -40,7 +40,7 @@ fi
 
 ui_section "Cuenta NUXIBA (Bitbucket) (opcional)"
 NUXIBA_ENABLED=0
-if [ ! -t 0 ] && [ "${GIT_NUXIBA_ENABLED:-}" != "1" ]; then
+if ! ui_interactive && [ "${GIT_NUXIBA_ENABLED:-}" != "1" ]; then
   ui_warn "Cuenta Nuxiba omitida (no interactivo)."
 elif ui_ask "¿Configurar cuenta NUXIBA (Bitbucket)?"; then
   N_NAME="$(_ask "Nombre:" GIT_NUXIBA_NAME "")"
@@ -100,18 +100,11 @@ if [ "$NUXIBA_ENABLED" = "1" ]; then
   ui_summary "Nuxiba Bitbucket" "Archivo: ~/.ssh/id_ed25519_nuxiba.pub" "Fingerprint: $nx_fp"
 fi
 
-if [ -t 0 ] && ui_ask "¿Ver claves publicas completas ahora?"; then
+if ui_interactive && ui_ask "¿Ver claves publicas completas ahora?"; then
   ui_seed_known_hosts
-  if ui_gum_available; then
-    gum pager "$HOME/.ssh/id_ed25519_personal.pub"
-    if [ "$NUXIBA_ENABLED" = "1" ]; then
-      gum pager "$HOME/.ssh/id_ed25519_nuxiba.pub"
-    fi
-  else
-    cat "$HOME/.ssh/id_ed25519_personal.pub"
-    if [ "$NUXIBA_ENABLED" = "1" ]; then
-      cat "$HOME/.ssh/id_ed25519_nuxiba.pub"
-    fi
+  ui_pager "$HOME/.ssh/id_ed25519_personal.pub"
+  if [ "$NUXIBA_ENABLED" = "1" ]; then
+    ui_pager "$HOME/.ssh/id_ed25519_nuxiba.pub"
   fi
 else
   ui_dim "Guarda las claves de los archivos listados y agrégalas a GitHub/Bitbucket."
