@@ -4,6 +4,11 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 LOG_DIR="${LOG_DIR:-$HOME/.local/state/enviroment-dotfiles/logs}"
 export VERBOSE="${VERBOSE:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --verbose|verbose|v) VERBOSE=1; export VERBOSE ;;
+  esac
+done
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 
 TMP_REPO="$(mktemp -d)"
