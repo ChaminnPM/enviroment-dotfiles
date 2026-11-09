@@ -6,30 +6,48 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 # shellcheck source=lib/ui.sh
 source "$REPO_DIR/scripts/lib/ui.sh"
 
+# Prompt con gum si hay TTY; env/default como fallback no interactivo.
+_ask() {
+  local prompt="$1" env_name="$2" default="${3:-}" value=""
+  if [ -t 0 ] && command -v gum >/dev/null 2>&1; then
+    value="$(gum input --placeholder "$default" --prompt "$prompt ")"
+  elif [ -t 0 ]; then
+    read -rp "$prompt " value
+  fi
+  if [ -z "$value" ]; then
+    value="${!env_name:-$default}"
+  fi
+  printf '%s' "$value"
+}
+
 ui_title "Identidad Git"
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 
 ui_section "Cuenta PERSONAL (GitHub)"
-P_NAME="$(ui_input "Nombre:" "Tu nombre")"
-P_EMAIL="$(ui_input "Email:" "tu@email.com")"
+P_NAME="$(_ask "Nombre:" GIT_PERSONAL_NAME "")"
+P_EMAIL="$(_ask "Email:" GIT_PERSONAL_EMAIL "")"
 if [ ! -f "$HOME/.ssh/id_ed25519_personal" ]; then
   ssh-keygen -t ed25519 -C "$P_EMAIL" -f "$HOME/.ssh/id_ed25519_personal" -N "" || { ui_error "Fallo generando llave personal"; exit 1; }
 fi
 
 echo ""
 NUXIBA_ENABLED=0
-if ui_ask "Configurar cuenta NUXIBA (Bitbucket)?"; then
-  ui_section "Cuenta NUXIBA (Bitbucket)"
-  N_NAME="$(ui_input "Nombre:" "Tu nombre Nuxiba")"
-  N_EMAIL="$(ui_input "Email:" "tu@nuxiba.com")"
-  if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
-    ssh-keygen -t ed25519 -C "$N_EMAIL" -f "$HOME/.ssh/id_ed25519_nuxiba" -N "" || { ui_error "Fallo generando llave nuxiba"; exit 1; }
+if [ -t 0 ] || [ "${GIT_NUXIBA_ENABLED:-}" = "1" ]; then
+  if ui_ask "Configurar cuenta NUXIBA (Bitbucket)?"; then
+    ui_section "Cuenta NUXIBA (Bitbucket)"
+    N_NAME="$(_ask "Nombre:" GIT_NUXIBA_NAME "")"
+    N_EMAIL="$(_ask "Email:" GIT_NUXIBA_EMAIL "")"
+    if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
+      ssh-keygen -t ed25519 -C "$N_EMAIL" -f "$HOME/.ssh/id_ed25519_nuxiba" -N "" || { ui_error "Fallo generando llave nuxiba"; exit 1; }
+    fi
+    NUXIBA_ENABLED=1
+  else
+    ui_warn "Saltando cuenta Nuxiba (opcional)."
   fi
-  NUXIBA_ENABLED=1
 else
-  ui_warn "Saltando cuenta Nuxiba (opcional)."
+  ui_warn "Cuenta Nuxiba omitida (no interactivo)."
 fi
 
 {
@@ -81,10 +99,12 @@ fi
 echo ""
 
 ui_info "Agrega las claves publicas arriba a GitHub (y Bitbucket si aplica)."
-if command -v gum >/dev/null 2>&1; then
-  gum input --placeholder "Presiona Enter para continuar..." >/dev/null || true
-else
-  read -rp "Presiona Enter para continuar..." _ < /dev/tty
+if [ -t 0 ]; then
+  if command -v gum >/dev/null 2>&1; then
+    gum input --placeholder "Presiona Enter para continuar..." >/dev/null || true
+  else
+    read -rp "Presiona Enter para continuar..." _
+  fi
 fi
 
 echo ""
