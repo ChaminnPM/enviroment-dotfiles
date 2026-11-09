@@ -85,7 +85,22 @@ bash scripts/sync.sh push
 - `gum`: se instala automaticamente si falta.
 - `herdr` y `oh-my-bash`: se instalan automaticamente.
 
-## Notas
+## Modo verbose
+Por defecto el instalador oculta el ruido de `apt-get`, `npm`, `git clone`, OpenCode y herdr, guardando logs en:
+```bash
+~/.local/state/enviroment-dotfiles/logs
+```
+
+Para ver toda la salida:
+```bash
+VERBOSE=1 bash bootstrap.sh
+bash bootstrap.sh --verbose
+sync-dotfiles pull --verbose
+sync-dotfiles push --verbose
+```
+
+El one-liner inicial usa un fallback silencioso antes de tener `gum`; cuando `gum` ya esta disponible muestra banners, spinners, prompts y resúmenes.
+
 - Los scripts usan `gum` para mejorar legibilidad y tienen fallback textual/ANSI.
 - `analyze-webrtc-dumps` es un **agente**, no una skill.
 - El repo publico no debe contener assets Nuxiba privados.

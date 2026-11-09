@@ -20,7 +20,8 @@ _ask() {
   printf '%s' "$value"
 }
 
-ui_title "Identidad Git"
+ui_clear
+ui_banner "Identidad Git"
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
@@ -29,7 +30,7 @@ ui_section "Cuenta PERSONAL (GitHub)"
 P_NAME="$(_ask "Nombre:" GIT_PERSONAL_NAME "")"
 P_EMAIL="$(_ask "Email:" GIT_PERSONAL_EMAIL "")"
 if [ ! -f "$HOME/.ssh/id_ed25519_personal" ]; then
-  ssh-keygen -t ed25519 -C "$P_EMAIL" -f "$HOME/.ssh/id_ed25519_personal" -N "" || { ui_error "Fallo generando llave personal"; exit 1; }
+  ui_logged "Generando clave personal..." "ssh-keygen -t ed25519 -C '$P_EMAIL' -f '$HOME/.ssh/id_ed25519_personal' -N '' >/dev/null 2>&1" || { ui_error "Fallo generando llave personal"; exit 1; }
 fi
 
 echo ""
@@ -40,7 +41,7 @@ if [ -t 0 ] || [ "${GIT_NUXIBA_ENABLED:-}" = "1" ]; then
     N_NAME="$(_ask "Nombre:" GIT_NUXIBA_NAME "")"
     N_EMAIL="$(_ask "Email:" GIT_NUXIBA_EMAIL "")"
     if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
-      ssh-keygen -t ed25519 -C "$N_EMAIL" -f "$HOME/.ssh/id_ed25519_nuxiba" -N "" || { ui_error "Fallo generando llave nuxiba"; exit 1; }
+      ui_logged "Generando clave Nuxiba..." "ssh-keygen -t ed25519 -C '$N_EMAIL' -f '$HOME/.ssh/id_ed25519_nuxiba' -N '' >/dev/null 2>&1" || { ui_error "Fallo generando llave nuxiba"; exit 1; }
     fi
     NUXIBA_ENABLED=1
   else
@@ -88,17 +89,12 @@ if [ "$NUXIBA_ENABLED" = "1" ]; then
 EOF
 fi
 
-echo ""
-ui_info "Claves publicas (agregalas a GitHub/Bitbucket):"
-echo "--- PERSONAL (GitHub) ---"
-cat "$HOME/.ssh/id_ed25519_personal.pub"
+ui_summary "Claves publicas (agregalas a GitHub/Bitbucket)" "PERSONAL (GitHub): $(cat "$HOME/.ssh/id_ed25519_personal.pub")"
 if [ "$NUXIBA_ENABLED" = "1" ]; then
-  echo "--- NUXIBA (Bitbucket) ---"
-  cat "$HOME/.ssh/id_ed25519_nuxiba.pub"
+  ui_summary "NUXIBA (Bitbucket): $(cat "$HOME/.ssh/id_ed25519_nuxiba.pub")"
 fi
-echo ""
 
-ui_info "Agrega las claves publicas arriba a GitHub (y Bitbucket si aplica)."
+ui_dim "Agrega las claves publicas arriba a GitHub (y Bitbucket si aplica)."
 if [ -t 0 ]; then
   if command -v gum >/dev/null 2>&1; then
     gum input --placeholder "Presiona Enter para continuar..." >/dev/null || true
@@ -107,12 +103,9 @@ if [ -t 0 ]; then
   fi
 fi
 
-echo ""
-ui_info "Ejecutando comprobacion de conexiones SSH (solo informativo)..."
-ssh -T git@github.com 2>&1 || true
+ui_logged "Comprobando SSH GitHub..." "ssh -T git@github.com >/dev/null 2>&1" && ui_ok "GitHub SSH OK" || ui_warn "GitHub SSH falla"
 if [ "$NUXIBA_ENABLED" = "1" ]; then
-  ssh -T git@bitbucket-nuxiba 2>&1 || true
+  ui_logged "Comprobando SSH Bitbucket..." "ssh -T git@bitbucket-nuxiba >/dev/null 2>&1" && ui_ok "Bitbucket SSH OK" || ui_warn "Bitbucket SSH falla"
 fi
 
-echo ""
 ui_ok "Configuracion de identidad completada."

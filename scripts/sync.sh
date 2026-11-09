@@ -3,8 +3,18 @@
 # Los assets privados (Nuxiba) se gestionan con sync-private.sh del repo privado.
 set -euo pipefail
 
+export PATH="$HOME/.local/bin:$PATH"
 OPENCODE_DIR="${OPENCODE_DIR:-$HOME/.config/opencode}"
-MODE="${1:-pull}"
+LOG_DIR="${LOG_DIR:-$HOME/.local/state/enviroment-dotfiles/logs}"
+MODE="pull"
+VERBOSE="${VERBOSE:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    pull|push) MODE="$arg" ;;
+    --verbose|verbose|v) VERBOSE=1 ;;
+  esac
+done
+export VERBOSE
 
 # Verificar git antes de clonar/sincronizar
 if ! command -v git >/dev/null 2>&1; then
@@ -22,6 +32,7 @@ fi
 
 # shellcheck source=lib/ui.sh
 source "$REPO_DIR/scripts/lib/ui.sh"
+ensure_log_dir
 
 # Rutas públicas relativas a config/opencode
 PUBLIC_PATHS=(
@@ -49,13 +60,14 @@ sync_path() {
   [ -e "$src" ] || return 0
   mkdir -p "$(dirname "$dst")"
   if [ -d "$src" ]; then
-    rsync -a --delete "$src" "$dst"
+    rsync -a --delete "$src" "$dst" >/dev/null 2>&1
   else
-    rsync -a "$src" "$dst"
+    rsync -a "$src" "$dst" >/dev/null 2>&1
   fi
 }
 
-ui_title "Sync público"
+ui_clear
+ui_banner "Sync publico"
 
 if ! { ssh -T git@github.com 2>&1 || true; } | grep -qi "successfully authenticated"; then
   ui_error "SSH GitHub falla. Ejecuta setup-git-identity.sh"
@@ -64,23 +76,23 @@ fi
 
 case "$MODE" in
   pull)
-    ( cd "$REPO_DIR" && git pull --rebase --autostash )
+    ui_logged "Actualizando repo publico..." "cd '$REPO_DIR' && git pull --rebase --autostash >/dev/null 2>&1" || { ui_warn "git pull fallo; revisa estado local o conflictos"; }
     for rel in "${PUBLIC_PATHS[@]}"; do
-      sync_path "$rel" "$REPO_DIR/config/opencode/$rel" "$OPENCODE_DIR/$rel"
+      sync_path "$rel" "$REPO_DIR/config/opencode/$rel" "$OPENCODE_DIR/$rel" || ui_warn "No se pudo sincronizar: $rel"
     done
-    ( cd "$OPENCODE_DIR" && npm install ) || ui_warn "npm install fallo; revisa node_modules manualmente"
-    ui_ok "sincronizado (pull público)"
+    ui_logged "npm install" "cd '$OPENCODE_DIR' && npm install >/dev/null 2>&1" || ui_warn "npm install fallo; revisa node_modules manualmente"
+    ui_summary "Sincronizado (pull publico)" "Assets publicos aplicados"
     ;;
   push)
     for rel in "${PUBLIC_PATHS[@]}"; do
       [ -e "$OPENCODE_DIR/$rel" ] || continue
-      sync_path "$rel" "$OPENCODE_DIR/$rel" "$REPO_DIR/config/opencode/$rel"
+      sync_path "$rel" "$OPENCODE_DIR/$rel" "$REPO_DIR/config/opencode/$rel" || ui_warn "No se pudo preparar: $rel"
     done
     rm -f "$REPO_DIR/config/opencode/service.json"
     rm -rf "$REPO_DIR/config/opencode/node_modules"
-    ( cd "$REPO_DIR" && git add -A && git commit -m "sync: $(date -Iseconds)" || ui_warn "nada que commitear" )
-    ( cd "$REPO_DIR" && git push )
-    ui_ok "sincronizado (push público)"
+    ui_logged "Commit publico..." "cd '$REPO_DIR' && git add -A && git commit -m 'sync: $(date -Iseconds)' >/dev/null 2>&1" || ui_dim "Nada que commitear"
+    ui_logged "Push publico..." "cd '$REPO_DIR' && git push >/dev/null 2>&1" || { ui_error "No se pudo subir al repo publico"; exit 1; }
+    ui_summary "Sincronizado (push publico)" "Repo publico actualizado"
     ;;
   *)
     ui_error "Uso: $0 {push|pull}"
