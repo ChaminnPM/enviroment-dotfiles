@@ -22,7 +22,7 @@ _ask() {
 }
 
 ui_clear
-ui_banner "🔐 Identidad Git" "GitHub / Bitbucket"
+ui_banner "Identidad Git" "GitHub / Bitbucket"
 
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
@@ -94,10 +94,10 @@ EOF
 fi
 
 gh_fp="$(ssh-keygen -lf "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null | awk '{print $2}' || echo '?')"
-ui_summary "🔑 GitHub personal" "Archivo: ~/.ssh/id_ed25519_personal.pub" "Fingerprint: $gh_fp"
+ui_summary "GitHub personal" "Archivo: ~/.ssh/id_ed25519_personal.pub" "Fingerprint: $gh_fp"
 if [ "$NUXIBA_ENABLED" = "1" ]; then
   nx_fp="$(ssh-keygen -lf "$HOME/.ssh/id_ed25519_nuxiba.pub" 2>/dev/null | awk '{print $2}' || echo '?')"
-  ui_summary "🔑 Nuxiba Bitbucket" "Archivo: ~/.ssh/id_ed25519_nuxiba.pub" "Fingerprint: $nx_fp"
+  ui_summary "Nuxiba Bitbucket" "Archivo: ~/.ssh/id_ed25519_nuxiba.pub" "Fingerprint: $nx_fp"
 fi
 
 if [ -t 0 ] && ui_ask "¿Ver claves publicas completas ahora?"; then

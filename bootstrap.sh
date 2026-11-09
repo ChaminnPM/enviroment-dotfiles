@@ -7,6 +7,7 @@ LOG_DIR="${LOG_DIR:-$HOME/.local/state/enviroment-dotfiles/logs}"
 
 # shellcheck source=scripts/lib/ui.sh
 source "$REPO_DIR/scripts/lib/ui.sh"
+export UI_APP_TITLE="AGENTS ENVIRONMENT"
 ensure_log_dir
 
 VERBOSE="${VERBOSE:-0}"

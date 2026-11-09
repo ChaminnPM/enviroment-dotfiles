@@ -3,6 +3,7 @@
 
 LOG_DIR="${LOG_DIR:-$HOME/.local/state/enviroment-dotfiles/logs}"
 export VERBOSE="${VERBOSE:-0}"
+export UI_APP_TITLE="${UI_APP_TITLE:-AGENTS ENVIRONMENT}"
 
 ensure_log_dir() {
   mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -44,11 +45,24 @@ ui_banner() {
   ensure_log_dir
   local w text
   w="$(ui_width)"
+  if [ "$#" -gt 1 ]; then
+    local head rest
+    head="$(ui_wrap "$w" "$1")"
+    shift
+    rest="$(ui_wrap "$w" "$*")"
+    if ui_gum_available; then
+      gum style --border rounded --border-foreground 63 --foreground 15 --bold --align center --width "$w" --margin "1 0" --padding "1 2" "$head" "$rest"
+    else
+      printf '\n\033[1;34m%s\033[0m\n' "$head"
+      printf '%s\n' "$rest"
+    fi
+    return 0
+  fi
   text="$(ui_wrap "$w" "$*")"
   if ui_gum_available; then
-    gum style --foreground 212 --border-foreground 212 --border double --align center --width "$w" --margin "1 0" --padding "0 1" "$text"
+    gum style --border rounded --border-foreground 63 --foreground 15 --bold --align center --width "$w" --margin "1 0" --padding "1 2" "$text"
   else
-    printf '\n\033[1;36m%s\033[0m\n' "NUXIBA ENVIRONMENT"
+    printf '\n\033[1;34m%s\033[0m\n' "$*"
     printf '%s\n' "$text"
   fi
 }
@@ -57,7 +71,7 @@ ui_step_start() {
   local step="$1"
   local title="$2"
   ui_clear
-  ui_banner "🎀 NUXIBA ENVIRONMENT" "$step: $title"
+  ui_banner "$UI_APP_TITLE" "$step: $title"
 }
 
 ui_step_done() {
@@ -72,7 +86,7 @@ ui_title() {
   w="$(ui_width)"
   text="$(ui_wrap "$w" "$*")"
   if ui_gum_available; then
-    gum style --border double --border-foreground 212 --align center --width "$w" --padding "0 2" --margin "1 0" "$text"
+    gum style --border rounded --border-foreground 63 --align center --width "$w" --padding "0 2" --margin "1 0" "$text"
   else
     printf '\n== %s ==\n' "$text"
   fi
