@@ -85,6 +85,12 @@ bash scripts/sync.sh push
 - `gum`: se instala automaticamente si falta.
 - `herdr` y `oh-my-bash`: se instalan automaticamente.
 
+## Comportamiento visual
+- La UI es dinámica: si `gum` se instala durante el bootstrap, el resto de pasos ya usan banners, spinners, cajas y resúmenes con `gum`.
+- Cada paso comienza limpiando pantalla y muestra solo el paso actual, con salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH redirigida a logs.
+- Las cajas se ajustan al ancho de la terminal (`tput cols`/`stty size`, con fallback).
+- Las claves publicas se muestran por fingerprint y archivo; la clave completa puede verse con `gum pager`.
+
 ## Modo verbose
 Por defecto el instalador oculta el ruido de `apt-get`, `npm`, `git clone`, OpenCode y herdr, guardando logs en:
 ```bash
