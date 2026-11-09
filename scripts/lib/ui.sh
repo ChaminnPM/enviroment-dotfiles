@@ -52,22 +52,41 @@ ui_interactive() {
 }
 
 ui_install_ui() {
-  ui_have && return 0
-  ui_ensure_cmd curl curl || return 1
-  ui_ensure_cmd gzip gzip || return 1
   local dest="$HOME/.local/bin/nui"
-  if [ -n "${REPO_DIR:-}" ] && [ -f "$REPO_DIR/bin/nui-$UI_OS-$UI_ARCH.gz" ]; then
+  local localgz="${REPO_DIR:-}/bin/nui-$UI_OS-$UI_ARCH.gz"
+  local want="${NUI_VERSION:-}" have=""
+
+  if [ -z "$want" ] && [ -n "${REPO_DIR:-}" ] && [ -f "$REPO_DIR/bin/VERSION" ]; then
+    want="$(cat "$REPO_DIR/bin/VERSION" 2>/dev/null || true)"
+  fi
+  if ui_have; then
+    have="$("$(ui_bin)" version 2>/dev/null | awk 'NR==1{print $2}')"
+    if [ -n "$want" ] && [ "$have" = "$want" ]; then
+      return 0
+    fi
+  fi
+  if [ -z "$want" ] && command -v curl >/dev/null 2>&1; then
+    want="$(curl -fsSL --max-time 10 "$NUI_BASE_URL/bin/VERSION" 2>/dev/null || true)"
+    if ui_have && [ -n "$want" ] && [ "$have" = "$want" ]; then
+      return 0
+    fi
+  fi
+
+  if [ -f "$localgz" ]; then
     # repo local: instalar sin red
-    if ! ui_logged "Instalando nui..." "mkdir -p '$HOME/.local/bin' && gzip -dc '$REPO_DIR/bin/nui-$UI_OS-$UI_ARCH.gz' > '$dest' && chmod 755 '$dest'"; then
+    if ! ui_logged "Instalando nui..." "mkdir -p '$HOME/.local/bin' && gzip -dc '$localgz' > '$dest' && chmod 755 '$dest'"; then
       return 1
     fi
   else
+    ui_ensure_cmd curl curl || return 1
+    ui_ensure_cmd gzip gzip || return 1
     local url="$NUI_BASE_URL/bin/nui-$UI_OS-$UI_ARCH.gz"
     if ! ui_logged "Instalando nui..." "mkdir -p '$HOME/.local/bin' && curl -fsSL '$url' -o '$dest.gz' && gzip -dc '$dest.gz' > '$dest' && chmod 755 '$dest' && rm -f '$dest.gz'"; then
       return 1
     fi
   fi
   export PATH="$HOME/.local/bin:$PATH"
+  export UI_BIN="$dest"
   ui_have
 }
 ui_install_gum() { ui_install_ui; } # compat
@@ -388,4 +407,230 @@ ui_report() {
   printf '  Logs: %s\n' "$LOG_DIR"
   [ ${#REPORT_ERR[@]} -gt 0 ] && return 1
   return 0
+}
+
+# --- plan de pasos + panel (nui steps run) -------------------------------
+# Uso:
+#   ui_panel_begin
+#   ui_panel_note "Comandos: sync-dotfiles pull/push"
+#   ui_panel_step "Dependencias base" --estimate 60 <<'EOF'
+#   ...comandos...
+#   EOF
+#   ui_panel_step "Identidad Git" --interactive <<'EOF'
+#   bash "$REPO_DIR/scripts/setup-git-identity.sh"
+#   EOF
+#   ui_panel_run
+#
+# Cada cuerpo se ejecuta con bash (set -euo pipefail) y puede emitir:
+#   ##progress N   porcentaje del paso
+#   ##log T        linea limpia en el panel
+#   ##title T      renombra el paso en vivo
+#   ##warn T       marca aviso y continua
+# ui_panel_run devuelve 1 si hubo errores (y ya imprime el reporte final).
+PANEL_DIR=""
+PANEL_STEPS=()
+PANEL_NOTES=()
+
+ui_panel_begin() {
+  ensure_log_dir
+  PANEL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nui-steps.XXXXXX")" || return 1
+  PANEL_STEPS=()
+  PANEL_NOTES=()
+}
+
+ui_panel_note() { PANEL_NOTES+=("$*"); }
+
+ui_panel_step() {
+  local title="$1"
+  shift
+  local optional=0 interactive=0 estimate=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --optional) optional=1 ;;
+      --interactive) interactive=1 ;;
+      --estimate) shift; estimate="${1:-0}" ;;
+      *) ui_warn "ui_panel_step: opcion desconocida: $1" ;;
+    esac
+    shift
+  done
+  [ -n "$PANEL_DIR" ] || ui_panel_begin
+
+  local n=$(( ${#PANEL_STEPS[@]} + 1 ))
+  local file="$PANEL_DIR/step-$n.sh"
+  {
+    printf 'set -euo pipefail\n'
+    cat
+  } > "$file"
+
+  local b64
+  b64="$(printf '%s' "$title" | base64 | tr -d '\n')"
+  PANEL_STEPS+=("$b64|$optional|$interactive|$estimate|$file")
+}
+
+# Filtra directivas y guarda el log del paso (fallback sin panel).
+_ui_panel_filter() {
+  local log="$1" line
+  while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$log"
+    case "$line" in
+      '##progress '*) ;;
+      '##log '*) printf '%s\n' "${line#'##log '}" ;;
+      '##title '*) ;;
+      '##warn '*)
+        printf '[WARN] %s\n' "${line#'##warn '}"
+        : > "$log.warn"
+        ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done
+}
+
+# Ejecuta el plan sin panel (nui ausente, VERBOSE o terminal no interactiva).
+_ui_panel_run_plain() {
+  local manifest="$1" title="$2"
+  local total=${#PANEL_STEPS[@]} i=0
+  local b64t opt intr est path t log rc
+
+  REPORT_OK=(); REPORT_WARN=(); REPORT_ERR=()
+  ui_clear
+  ui_banner "$title"
+  printf '\nLogs: %s\n' "$LOG_DIR"
+
+  while IFS='|' read -r b64t opt intr est path; do
+    [ -n "$path" ] || continue
+    i=$((i + 1))
+    t="$(printf '%s' "$b64t" | base64 -d)"
+    log="$LOG_DIR/steps-$(date +%Y%m%d-%H%M%S)-$(printf '%02d' "$i")-$(printf '%s' "$t" | tr -cs '[:alnum:]' '-' | cut -c1-40).log"
+    rm -f "$log.warn"
+
+    printf '\n\033[1m== [%d/%d] %s ==\033[0m\n' "$i" "$total" "$t"
+
+    if [ "$intr" = "1" ]; then
+      if [ -e /dev/tty ] && [ -r /dev/tty ]; then
+        bash "$path" < /dev/tty
+      else
+        bash "$path"
+      fi
+      rc=$?
+    else
+      bash "$path" 2>&1 | _ui_panel_filter "$log"
+      rc=${PIPESTATUS[0]}
+    fi
+
+    if [ "$rc" -eq 0 ]; then
+      if [ -f "$log.warn" ]; then
+        report_warn "$t"
+      else
+        report_ok "$t"
+      fi
+      continue
+    fi
+    if [ "$opt" = "1" ]; then
+      report_warn "$t: falló (opcional)"
+      continue
+    fi
+    report_err "$t: exit $rc"
+    break
+  done < "$manifest"
+
+  for x in ${PANEL_NOTES[@]+"${PANEL_NOTES[@]}"}; do report_info "$x"; done
+  ui_report
+}
+
+# ui_panel_run [--title T] [--plain]: ejecuta el plan y muestra el reporte.
+ui_panel_run() {
+  local title="${UI_APP_TITLE:-INSTALACIÓN}" plain=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --title) shift; title="${1:-$title}" ;;
+      --plain) plain=1 ;;
+      *) ui_warn "ui_panel_run: opcion desconocida: $1" ;;
+    esac
+    shift
+  done
+
+  if [ ${#PANEL_STEPS[@]} -eq 0 ]; then
+    ui_error "No hay pasos para ejecutar"
+    return 1
+  fi
+
+  local manifest="$PANEL_DIR/manifest" notes="$PANEL_DIR/notes" plan="$PANEL_DIR/plan.json"
+  local entry
+  for entry in "${PANEL_STEPS[@]}"; do printf '%s\n' "$entry"; done > "$manifest"
+  for entry in ${PANEL_NOTES[@]+"${PANEL_NOTES[@]}"}; do printf '%s\n' "$entry"; done > "$notes"
+
+  if ! PANEL_TITLE="$title" python3 - "$manifest" "$notes" "$plan" <<'PY'
+import base64, json, os, shlex, sys
+
+manifest, notes_path, out = sys.argv[1:4]
+steps = []
+with open(manifest, encoding="utf-8") as fh:
+    for line in fh:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        b64title, optional, interactive, estimate, path = line.split("|")
+        steps.append({
+            "title": base64.b64decode(b64title).decode("utf-8"),
+            "cmd": "bash " + shlex.quote(path),
+            "optional": optional == "1",
+            "interactive": interactive == "1",
+            "estimate": int(estimate or 0),
+        })
+
+notes = []
+try:
+    with open(notes_path, encoding="utf-8") as fh:
+        notes = [l.rstrip("\n") for l in fh if l.strip()]
+except FileNotFoundError:
+    pass
+
+with open(out, "w", encoding="utf-8") as fh:
+    json.dump({
+        "title": os.environ.get("PANEL_TITLE", "INSTALACIÓN"),
+        "notes": notes,
+        "steps": steps,
+    }, fh, ensure_ascii=False)
+PY
+  then
+    ui_error "No se pudo generar el plan de pasos"
+    return 1
+  fi
+
+  if [ "${PLAN_ONLY:-0}" = "1" ]; then
+    cat "$plan"
+    if [ "${PLAN_KEEP:-0}" != "1" ]; then
+      rm -rf "$PANEL_DIR"
+      PANEL_DIR=""
+      PANEL_STEPS=()
+      PANEL_NOTES=()
+    fi
+    return 0
+  fi
+
+  local rc=0 verbose_plain="$plain"
+  [ "${VERBOSE:-0}" = "1" ] && verbose_plain=1
+
+  if ui_have && ui_interactive; then
+    local extra=()
+    [ "$verbose_plain" = "1" ] && extra+=(--plain)
+    if "$(ui_bin)" steps run --plan "$plan" --log-dir "$LOG_DIR" --title "$title" \
+        ${extra[@]+"${extra[@]}"}; then
+      rc=0
+    else
+      rc=$?
+    fi
+  else
+    if _ui_panel_run_plain "$manifest" "$title"; then
+      rc=0
+    else
+      rc=$?
+    fi
+  fi
+
+  rm -rf "$PANEL_DIR"
+  PANEL_DIR=""
+  PANEL_STEPS=()
+  PANEL_NOTES=()
+  return "$rc"
 }

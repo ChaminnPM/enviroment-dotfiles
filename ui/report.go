@@ -46,6 +46,14 @@ func cmdReport(args []string) {
 		}
 	}
 
+	printReport(title, oks, warns, errs, infos)
+	if len(errs) > 0 {
+		os.Exit(1)
+	}
+}
+
+// printReport imprime el reporte final y devuelve true si hay errores.
+func printReport(title string, oks, warns, errs, infos []string) bool {
 	clearScreen()
 
 	width := termWidth()
@@ -86,7 +94,5 @@ func cmdReport(args []string) {
 		len(oks), len(warns), len(errs))
 	fmt.Printf("\n  %s\n", foot.Render(counts))
 
-	if len(errs) > 0 {
-		os.Exit(1)
-	}
+	return len(errs) > 0
 }

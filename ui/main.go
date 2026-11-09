@@ -8,7 +8,7 @@ import (
 	"os"
 )
 
-const nuiVersion = "0.1.0"
+var nuiVersion = "0.2.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -60,6 +60,8 @@ func main() {
 		clearScreen()
 	case "report":
 		cmdReport(args)
+	case "steps":
+		os.Exit(cmdSteps(args))
 	case "version", "--version", "-v":
 		fmt.Println("nui " + nuiVersion)
 	case "help", "--help", "-h":
@@ -82,6 +84,8 @@ Comandos:
   box [--color ok|err|warn|accent] [--align center] <lineas...>
   clear                                   limpia pantalla y scrollback
   report [--ok x] [--warn x] [--err x] [--info x] [--title t]
+  steps run --plan <archivo|-> [--log-dir DIR] [--plain] [--title t]
+                                          panel de pasos con ejecucion en vivo
   spin [--spinner s] [--titulo t] -- <cmd...>   spinner mientras corre cmd
   input [--prompt p] [--placeholder x] [--value v] [--password]
   confirm <pregunta>                      exit 0 si, exit 1 no

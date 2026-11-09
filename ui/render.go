@@ -40,6 +40,15 @@ func termWidth() int {
 	return 80
 }
 
+// termGetSize devuelve ancho/alto de la terminal del descriptor dado.
+func termGetSize(fd int) (int, int, error) {
+	w, h, err := term.GetSize(fd)
+	if err != nil {
+		return 0, 0, err
+	}
+	return w, h, nil
+}
+
 // clearScreen limpia pantalla y scrollback (ESC[3J) en TTY.
 func clearScreen() {
 	if os.Getenv("NUI_NO_CLEAR") == "1" {

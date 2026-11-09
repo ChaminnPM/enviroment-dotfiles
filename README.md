@@ -15,7 +15,7 @@ El one-liner descarga el repo como **tarball** y no requiere `git` para empezar.
 3. Ejecutar `bootstrap.sh`.
 4. `bootstrap.sh`:
    - Instala `git` y dependencias base si faltan.
-   - Instala `nui` (binario propio con [bubbletea](https://github.com/charmbracelet/bubbletea)) si falta y muestra banners/spinners con `nui`.
+   - Instala `nui` (binario propio con [bubbletea](https://github.com/charmbracelet/bubbletea)) si falta o si la version instalada difiere de `bin/VERSION`, y lo usa para banners, spinners y prompts.
    - Configura identidad Git por defecto. Para omitirla:
      ```bash
      SKIP_GIT_IDENTITY=1 bash bootstrap.sh
@@ -86,10 +86,11 @@ bash scripts/sync.sh push
 - `herdr` y `oh-my-bash`: se instalan automaticamente.
 
 ## Comportamiento visual
-- La UI usa `nui` (binario propio en Go construido con bubbletea/lipgloss; fuente en `ui/`, binarios en `bin/`). Si `nui` no esta disponible, hay fallback textual/ANSI.
-- Cada paso limpia la pantalla anterior (`ESC[3J`) y muestra solo el paso actual (max ~6 lineas), con salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH redirigida a logs.
-- Al terminar se muestra un **reporte final**: secciones `INSTALADO`, `AVISOS` y `ERRORES` (exit 1 si hay errores). Errores fatales (`ui_fatal`) muestran el reporte y salen.
-- Las cajas se ajustan al ancho de la terminal.
+- La UI usa `nui steps run` (binario propio en Go con bubbletea/lipgloss; fuente en `ui/`, binarios en `bin/`): un panel de dos columnas con el listado de pasos (`[✓]`/`[!]`/`[✗]`) y el detalle del paso activo (progreso, contador `paso N de M` y logs). Si `nui` no esta disponible, hay fallback textual/ANSI.
+- Los pasos se definen en `scripts/lib/ui.sh` (`ui_panel_step`) como un plan JSON que `nui` ejecuta; los prompts y selecciones se resuelven antes del panel, salvo los pasos interactivos (`--interactive`), que ceden la terminal (por ejemplo `setup-git-identity.sh`).
+- Cada paso emite `##progress N`, `##log T` y `##warn T` para el panel; la salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH se guarda en logs.
+- Al terminar se muestra un **reporte final**: secciones `INSTALADO`, `AVISOS` y `ERRORES` (exit 1 si hay errores). `q`/`esc`/`ctrl+c` cancelan la ejecucion (exit 1).
+- Las cajas se ajustan al ancho de la terminal y el panel se adapta al tamano de la ventana.
 - Las claves publicas se muestran por fingerprint y archivo; la clave completa puede verse con `nui pager`.
 - Los prompts (input/confirm/choose) resuelven TTY via `/dev/tty`, por lo que funcionan con `curl | bash`.
 
