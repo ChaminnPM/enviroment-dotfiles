@@ -145,6 +145,7 @@ ui_install_gum() {
   if [ -n "$gum_bin" ]; then
     ui_logged "Instalando gum..." "mkdir -p '$HOME/.local/bin' && install -m 0755 '$gum_bin' '$HOME/.local/bin/gum'" || { rm -rf "$tmp"; return 1; }
     export PATH="$HOME/.local/bin:$PATH"
+    rm -rf "$tmp"
     command -v gum >/dev/null 2>&1
   else
     rm -rf "$tmp"
