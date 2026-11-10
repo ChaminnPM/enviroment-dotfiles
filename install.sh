@@ -19,6 +19,18 @@ if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
   APTPFX="sudo "
 fi
 
+# Si faltan herramientas y hay sudo, cachear credenciales en el TTY real
+# (los comandos de quiet_run no tienen TTY propio).
+if [ -n "$APTPFX" ] && [ -e /dev/tty ]; then
+  _need=0
+  for _c in curl tar gzip; do
+    command -v "$_c" >/dev/null 2>&1 || _need=1
+  done
+  if [ "$_need" = "1" ]; then
+    sudo -v < /dev/tty || true
+  fi
+fi
+
 quiet_run() {
   local title="$1" cmd="$2" log
   log="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-$$.log"

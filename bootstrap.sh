@@ -39,27 +39,64 @@ command -v rsync >/dev/null 2>&1 || APT_PKGS+=(rsync)
 command -v numfmt >/dev/null 2>&1 || APT_PKGS+=(coreutils)
 command -v xdg-open >/dev/null 2>&1 || APT_PKGS+=(xdg-utils)
 command -v ssh-keygen >/dev/null 2>&1 || APT_PKGS+=(openssh-client)
-export APT_PKGS="${APT_PKGS[*]}"
-
-# Credenciales sudo antes del panel (la contraseña la maneja solo sudo por
-# el TTY real; nunca pasa por nui, variables o logs). Solo si falta algo.
-if [ -n "$APT_PREFIX" ] && ui_interactive && [ -n "$APT_PKGS" ]; then
-  sudo -v < /dev/tty 2>/dev/null || ui_warn "Sin credenciales sudo; los pasos con apt pueden fallar"
-fi
+# bash no puede exportar arrays: convertir a escalar antes de exportar.
+APT_PKGS_STR="${APT_PKGS[*]}"
+unset APT_PKGS
+APT_PKGS="$APT_PKGS_STR"
+export APT_PKGS
 
 # --- plan de pasos -------------------------------------------------------
 ui_panel_begin
 ui_panel_note "Comandos: sync-dotfiles pull/push"
 ui_panel_note "Ejecuta: exec \$SHELL"
 
+ui_panel_step "Credenciales sudo" --optional --interactive --estimate 15 <<'EOF'
+if [ -z "${APT_PREFIX:-}" ]; then
+  echo "##log Sin sudo; apt se ejecutara como usuario actual"
+  exit 0
+fi
+if [ -z "${APT_PKGS:-}" ]; then
+  echo "##log No hay paquetes pendientes"
+  exit 0
+fi
+if sudo -n true 2>/dev/null; then
+  echo "##log Credenciales sudo OK"
+  exit 0
+fi
+echo "##log Se solicitara la contrasena de sudo (solo para apt)"
+if sudo -v; then
+  echo "##log Credenciales sudo guardadas"
+else
+  echo "##warn No se pudieron guardar las credenciales sudo"
+  exit 1
+fi
+EOF
+
 ui_panel_step "Dependencias base" --estimate 45 <<'EOF'
+apt_run() {
+  local log rc
+  log="$(mktemp)"
+  if [ -n "${APT_PREFIX:-}" ]; then
+    ${APT_PREFIX}apt-get "$@" >"$log" 2>&1
+  else
+    apt-get "$@" >"$log" 2>&1
+  fi
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "##log Salida de apt (ultimas lineas):"
+    tail -n 5 "$log" 2>/dev/null | while IFS= read -r l; do echo "##log $l"; done
+  fi
+  rm -f "$log"
+  return "$rc"
+}
+
 if [ -n "${APT_PKGS:-}" ]; then
   if command -v apt-get >/dev/null 2>&1; then
-    echo "##log Actualizando índices"
-    ${APT_PREFIX}apt-get update >/dev/null 2>&1 || true
+    echo "##log Actualizando indices"
+    apt_run update || true
     echo "##log Instalando: ${APT_PKGS}"
-    if ! ${APT_PREFIX}apt-get install -y ${APT_PKGS} >/dev/null 2>&1; then
-      echo "##warn No se pudieron instalar todos los paquetes"
+    if ! apt_run install -y ${APT_PKGS}; then
+      echo "##warn No se pudieron instalar: ${APT_PKGS}"
     fi
   else
     echo "##warn apt-get no disponible; instala: ${APT_PKGS}"
@@ -67,7 +104,10 @@ if [ -n "${APT_PKGS:-}" ]; then
 else
   echo "##log Todas las dependencias base ya estaban instaladas"
 fi
-command -v git >/dev/null 2>&1 || { echo "##log git es obligatorio"; exit 1; }
+if ! command -v git >/dev/null 2>&1; then
+  echo "##log git no esta disponible; instala: ${APT_PREFIX}apt-get install -y git"
+  exit 1
+fi
 echo "Dependencias base listas"
 EOF
 
