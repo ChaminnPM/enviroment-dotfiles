@@ -46,11 +46,6 @@ func main() {
 			fmt.Fprintln(os.Stderr, "nui banner:", err)
 			os.Exit(1)
 		}
-	case "step":
-		if err := cmdStep(args); err != nil {
-			fmt.Fprintln(os.Stderr, "nui step:", err)
-			os.Exit(1)
-		}
 	case "box":
 		if err := cmdBox(args); err != nil {
 			fmt.Fprintln(os.Stderr, "nui box:", err)
@@ -79,7 +74,6 @@ func usage(w *os.File) {
 Uso: nui <comando> [opciones]
 
 Comandos:
-  step [--no-clear] <titulo> <subtitulo>  limpia pantalla y pinta banner del paso
   banner <linea>...                       banner centrado
   box [--color ok|err|warn|accent] [--align center] <lineas...>
   clear                                   limpia pantalla y scrollback

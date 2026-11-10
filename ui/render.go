@@ -155,27 +155,6 @@ func cmdBanner(args []string) error {
 	return nil
 }
 
-// cmdStep: limpia pantalla y pinta el banner compacto del paso (<=6 lineas).
-func cmdStep(args []string) error {
-	noClear := false
-	var rest []string
-	for _, a := range args {
-		if a == "--no-clear" {
-			noClear = true
-			continue
-		}
-		rest = append(rest, a)
-	}
-	if len(rest) == 0 {
-		return fmt.Errorf("falta el titulo del paso")
-	}
-	if !noClear {
-		clearScreen()
-	}
-	fmt.Println(bannerBox(termWidth(), 0, rest))
-	return nil
-}
-
 // cmdBox: caja de contenido (resumen, errores, avisos).
 func cmdBox(args []string) error {
 	color := "accent"

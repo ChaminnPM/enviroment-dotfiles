@@ -87,12 +87,12 @@ bash scripts/sync.sh push
 
 ## Comportamiento visual
 - La UI usa `nui steps run` (binario propio en Go con bubbletea/lipgloss; fuente en `ui/`, binarios en `bin/`): un panel de dos columnas con el listado de pasos (`[✓]`/`[!]`/`[✗]`) y el detalle del paso activo (progreso, contador `paso N de M` y logs). Si `nui` no esta disponible, hay fallback textual/ANSI.
-- Los pasos se definen en `scripts/lib/ui.sh` (`ui_panel_step`) como un plan JSON que `nui` ejecuta; los prompts y selecciones se resuelven antes del panel, salvo los pasos interactivos (`--interactive`), que ceden la terminal (por ejemplo `setup-git-identity.sh`).
+- Los pasos se definen en `scripts/lib/ui.sh` (`ui_panel_step`); los prompts (texto, password, confirmacion y seleccion multiple) se resuelven **dentro del panel** con `ui_panel_inputs`, por lo que ninguna pantalla anterior aparece durante la instalacion.
+- Los pasos opcionales (identidad Git, .NET) se pueden **omitir** con `esc` sin detener la instalacion; los prompts y selecciones se resuelven antes del panel solo cuando no hay TTY.
 - Cada paso emite `##progress N`, `##log T` y `##warn T` para el panel; la salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH se guarda en logs.
-- Al terminar se muestra un **reporte final**: secciones `INSTALADO`, `AVISOS` y `ERRORES` (exit 1 si hay errores). `q`/`esc`/`ctrl+c` cancelan la ejecucion (exit 1).
+- Al terminar, el **reporte final** (`INSTALADO` / `AVISOS` / `ERRORES`) se muestra como estado final dentro del panel; `q` sale (exit 1 si hay errores). `q`/`esc`/`ctrl+c` durante la ejecucion cancelan (exit 1).
 - Las cajas se ajustan al ancho de la terminal y el panel se adapta al tamano de la ventana.
-- Las claves publicas se muestran por fingerprint y archivo; la clave completa puede verse con `nui pager`.
-- Los prompts (input/confirm/choose) resuelven TTY via `/dev/tty`, por lo que funcionan con `curl | bash`.
+- SSH no debe pedir host key durante la instalación: se usan `ssh-keyscan` y `StrictHostKeyChecking=accept-new`.
 
 ## Modo verbose
 Por defecto el instalador oculta el ruido de `apt-get`, `npm`, `git clone`, OpenCode y herdr, guardando logs en:

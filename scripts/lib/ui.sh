@@ -43,7 +43,6 @@ ui_bin() {
 }
 
 ui_have() { ui_bin >/dev/null 2>&1; }
-ui_gum_available() { ui_have; } # compat con scripts antiguos
 
 # Hay TTY utilizable (stdin directo o /dev/tty)?
 ui_interactive() {
@@ -123,7 +122,6 @@ ui_supports_steps() {
     *) return 1 ;;
   esac
 }
-ui_install_gum() { ui_install_ui; } # compat
 
 # --- utilidades ----------------------------------------------------------
 ui_width() {
@@ -167,29 +165,6 @@ ui_banner() {
   printf '%s\n' "$(printf '%*s' "$w" '' | tr ' ' '-')"
   printf '%s\n' "$*"
   printf '%s\n' "$(printf '%*s' "$w" '' | tr ' ' '-')"
-}
-
-# Cada paso: limpia TODO lo anterior y pinta solo el paso actual (<=6 lineas).
-ui_step_start() {
-  local step="$1" title="$2"
-  if [ "${VERBOSE:-0}" = "1" ]; then
-    printf '\n== %s: %s ==\n' "$step" "$title"
-    return 0
-  fi
-  if ui_have; then
-    "$(ui_bin)" step "$UI_APP_TITLE" "$step: $title"
-  else
-    ui_clear
-    ui_banner "$UI_APP_TITLE" "$step: $title"
-  fi
-}
-
-ui_step_done() {
-  ui_ok "$*"
-  report_ok "$*"
-  if [ "${VERBOSE:-0}" != "1" ] && [ -t 1 ]; then
-    sleep 0.35
-  fi
 }
 
 ui_title() {
@@ -299,18 +274,6 @@ ui_choose() {
     local sel
     read -rp "Escribe separados por espacio (o Enter para omitir): " sel
     printf '%s\n' $sel
-  fi
-}
-
-ui_pager() {
-  if ui_have; then
-    "$(ui_bin)" pager "$@"
-    return 0
-  fi
-  if command -v less >/dev/null 2>&1; then
-    less -R "$@"
-  else
-    cat "$@"
   fi
 }
 
@@ -470,9 +433,65 @@ ui_panel_begin() {
   PANEL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nui-steps.XXXXXX")" || return 1
   PANEL_STEPS=()
   PANEL_NOTES=()
+  PANEL_INPUTS=""
 }
 
 ui_panel_note() { PANEL_NOTES+=("$*"); }
+
+# ui_panel_inputs: declara el formulario del SIGUIENTE ui_panel_step.
+# DSL (una directiva por linea, se lee de stdin):
+#   input <nombre> <prompt...>          texto
+#   password <nombre> <prompt...>       texto oculto
+#   confirm <nombre> <prompt...> [s|n]  booleano
+#   select <nombre> <prompt...> [many]  lista (many = multi-seleccion)
+#   option <nombre> <valor>             opcion del select
+#   default <nombre> <valor>            valor por defecto
+ui_panel_inputs() { PANEL_INPUTS="$(cat)"; }
+
+_ui_panel_inputs_json() {
+  python3 -c '
+import json, sys
+
+inputs = []
+cur = None
+for raw in sys.stdin.read().splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    kind = line.split(None, 1)[0]
+    rest = line[len(kind):].strip()
+    if kind in ("input", "password", "confirm", "select"):
+        parts = rest.split(None, 1)
+        name = parts[0] if parts else ""
+        prompt = parts[1] if len(parts) > 1 else ""
+        item = {"type": kind, "name": name, "prompt": prompt}
+        if kind == "confirm":
+            toks = prompt.split()
+            if toks and toks[-1].lower() in ("s", "n", "si", "no", "y", "true", "false"):
+                item["default"] = "true" if toks[-1].lower() in ("s", "si", "y", "true") else "false"
+                prompt = " ".join(toks[:-1])
+                item["prompt"] = prompt
+        if kind == "select":
+            toks = prompt.split()
+            multi = bool(toks and toks[-1].lower() == "many")
+            if multi:
+                prompt = " ".join(toks[:-1])
+            item["multi"] = multi
+            item["prompt"] = prompt
+            item["options"] = []
+        inputs.append(item)
+        cur = item
+    elif kind == "option" and cur is not None:
+        opt = rest.split(None, 1)
+        if len(opt) > 1:
+            cur.setdefault("options", []).append(opt[1])
+    elif kind == "default" and cur is not None:
+        dflt = rest.split(None, 1)
+        if len(dflt) > 1:
+            cur["default"] = dflt[1]
+print(json.dumps(inputs, ensure_ascii=False))
+'
+}
 
 ui_panel_step() {
   local title="$1"
@@ -496,9 +515,17 @@ ui_panel_step() {
     cat
   } > "$file"
 
-  local b64
+  local b64 b64inputs=""
   b64="$(printf '%s' "$title" | base64 | tr -d '\n')"
-  PANEL_STEPS+=("$b64|$optional|$interactive|$estimate|$file")
+  if [ -n "$PANEL_INPUTS" ]; then
+    b64inputs="$(printf '%s' "$PANEL_INPUTS" | _ui_panel_inputs_json | base64 | tr -d '\n')" || {
+      ui_error "ui_panel_inputs: DSL invalido"
+      PANEL_INPUTS=""
+      return 1
+    }
+  fi
+  PANEL_INPUTS=""
+  PANEL_STEPS+=("$b64|$optional|$interactive|$estimate|$file|$b64inputs")
 }
 
 # Filtra directivas y guarda el log del paso (fallback sin panel).
@@ -520,17 +547,89 @@ _ui_panel_filter() {
 }
 
 # Ejecuta el plan sin panel (nui ausente, VERBOSE o terminal no interactiva).
+# Pide los inputs de un paso por stdin (fallback sin panel).
+_ui_panel_prompt_inputs() {
+  local state="$1" idx="$2" b64="$3"
+  [ -n "$b64" ] || return 0
+  local out="$state/result-$(printf '%02d' "$idx").env"
+  : > "$out"
+  local type name prompt default multi options val sel n i idxopt yesno
+  local fields
+  fields="$(mktemp "${TMPDIR:-/tmp}/nui-inputs.XXXXXX")"
+  printf '%s' "$b64" | base64 -d | python3 -c '
+import json, sys
+for f in json.load(sys.stdin):
+    d = f.get("default")
+    if d is True: d = "true"
+    elif d is False: d = "false"
+    else: d = str(d)
+    print("\t".join([
+        f.get("type", ""), f.get("name", ""), f.get("prompt", ""), d,
+        "1" if f.get("multi") else "0",
+        "\x1f".join(f.get("options", [])),
+    ]))
+' > "$fields"
+  local -a field_lines=()
+  mapfile -t field_lines < "$fields"
+  for line in "${field_lines[@]}"; do
+    IFS=$'\t' read -r type name prompt default multi options <<< "$line"
+    [ -n "$type" ] || continue
+    val="$default"
+    case "$type" in
+      input)
+        read -rp "$(printf '%s [%s]: ' "$prompt" "$default")" val || true
+        ;;
+      password)
+        read -rsp "$(printf '%s: ' "$prompt")" val || true
+        printf '\n'
+        ;;
+      confirm)
+        yesno=n
+        [ "$default" = "true" ] && yesno=s
+        read -rp "$(printf '%s [s/n] (%s): ' "$prompt" "$yesno")" val || true
+        if [ -z "$val" ]; then val="$default"; else
+          case "${val,,}" in
+            s|si|sí|y|yes|true) val=true ;;
+            *) val=false ;;
+          esac
+        fi
+        ;;
+      select)
+        printf '\n%s\n' "$prompt"
+        local -a opts=()
+        IFS=$'\x1f' read -ra opts <<< "$options"
+        for i in "${!opts[@]}"; do printf '  %2d) %s\n' "$((i + 1))" "${opts[$i]}"; done
+        read -rp "Seleccion (numeros separados por espacio): " sel || true
+        val=""
+        for n in $sel; do
+          idxopt=$((n - 1))
+          if [ "$idxopt" -ge 0 ] && [ "$idxopt" -lt "${#opts[@]}" ]; then
+            if [ -n "$val" ]; then val="$val
+${opts[$idxopt]}"; else val="${opts[$idxopt]}"; fi
+          fi
+          [ "$multi" = "1" ] || break
+        done
+        ;;
+    esac
+    printf '%s=%q\n' "$name" "$val" >> "$out"
+  done
+  rm -f "$fields"
+}
+
 _ui_panel_run_plain() {
   local manifest="$1" title="$2"
   local total=${#PANEL_STEPS[@]} i=0
-  local b64t opt intr est path t log rc
+  local b64t opt intr est path b64inputs t log rc
 
   REPORT_OK=(); REPORT_WARN=(); REPORT_ERR=()
   ui_clear
   ui_banner "$title"
   printf '\nLogs: %s\n' "$LOG_DIR"
 
-  while IFS='|' read -r b64t opt intr est path; do
+  local -a manifest_lines=()
+  mapfile -t manifest_lines < "$manifest"
+  for entry in "${manifest_lines[@]}"; do
+    IFS='|' read -r b64t opt intr est path b64inputs <<< "$entry"
     [ -n "$path" ] || continue
     i=$((i + 1))
     t="$(printf '%s' "$b64t" | base64 -d)"
@@ -538,6 +637,9 @@ _ui_panel_run_plain() {
     rm -f "$log.warn"
 
     printf '\n\033[1m== [%d/%d] %s ==\033[0m\n' "$i" "$total" "$t"
+    local result="${NUI_STATE_DIR:-$PANEL_DIR}/result-$(printf '%02d' "$i").env"
+    _ui_panel_prompt_inputs "${NUI_STATE_DIR:-$PANEL_DIR}" "$i" "$b64inputs"
+    export NUI_STEP_RESULT="$result"
 
     if [ "$intr" = "1" ]; then
       if [ -e /dev/tty ] && [ -r /dev/tty ]; then
@@ -565,7 +667,7 @@ _ui_panel_run_plain() {
     fi
     report_err "$t: exit $rc"
     break
-  done < "$manifest"
+  done
 
   for x in ${PANEL_NOTES[@]+"${PANEL_NOTES[@]}"}; do report_info "$x"; done
   ui_report
@@ -593,6 +695,9 @@ ui_panel_run() {
   for entry in "${PANEL_STEPS[@]}"; do printf '%s\n' "$entry"; done > "$manifest"
   for entry in ${PANEL_NOTES[@]+"${PANEL_NOTES[@]}"}; do printf '%s\n' "$entry"; done > "$notes"
 
+  PANEL_STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nui-steps-state.XXXXXX")"
+  export NUI_STATE_DIR="$PANEL_STATE_DIR"
+
   if ! PANEL_TITLE="$title" python3 - "$manifest" "$notes" "$plan" <<'PY'
 import base64, json, os, shlex, sys
 
@@ -603,14 +708,20 @@ with open(manifest, encoding="utf-8") as fh:
         line = line.rstrip("\n")
         if not line:
             continue
-        b64title, optional, interactive, estimate, path = line.split("|")
-        steps.append({
+        parts = line.split("|")
+        while len(parts) < 6:
+            parts.append("")
+        b64title, optional, interactive, estimate, path, b64inputs = parts[:6]
+        step = {
             "title": base64.b64decode(b64title).decode("utf-8"),
             "cmd": "bash " + shlex.quote(path),
             "optional": optional == "1",
             "interactive": interactive == "1",
             "estimate": int(estimate or 0),
-        })
+        }
+        if b64inputs:
+            step["inputs"] = json.loads(base64.b64decode(b64inputs).decode("utf-8"))
+        steps.append(step)
 
 notes = []
 try:
@@ -662,7 +773,7 @@ PY
     fi
   fi
 
-  rm -rf "$PANEL_DIR"
+  rm -rf "$PANEL_DIR" "$PANEL_STATE_DIR"
   PANEL_DIR=""
   PANEL_STEPS=()
   PANEL_NOTES=()

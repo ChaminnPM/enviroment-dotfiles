@@ -41,30 +41,10 @@ command -v xdg-open >/dev/null 2>&1 || APT_PKGS+=(xdg-utils)
 command -v ssh-keygen >/dev/null 2>&1 || APT_PKGS+=(openssh-client)
 export APT_PKGS="${APT_PKGS[*]}"
 
-# --- paquetes custom: se pregunta antes del panel ------------------------
-EXTRA_PKGS=(lazyvim fzf ripgrep bat eza zoxide fd-find lazygit)
-CHOSEN_EXTRAS=()
-mapfile -t CHOSEN_EXTRAS < <(ui_choose "Paquetes custom (espacio para marcar, enter confirma)" "${EXTRA_PKGS[@]}" || true)
-
-CUSTOM_APT=()
-for p in ${CHOSEN_EXTRAS[@]+"${CHOSEN_EXTRAS[@]}"}; do
-  case "$p" in
-    lazyvim) ;;
-    fd-find) command -v fd >/dev/null 2>&1 || CUSTOM_APT+=(fd-find) ;;
-    lazygit) command -v lazygit >/dev/null 2>&1 || CUSTOM_APT+=(lazygit) ;;
-    *) command -v "$p" >/dev/null 2>&1 || CUSTOM_APT+=("$p") ;;
-  esac
-done
-export CUSTOM_APT="${CUSTOM_APT[*]}"
-
-WANT_LAZYVIM=0
-printf '%s\n' ${CHOSEN_EXTRAS[@]+"${CHOSEN_EXTRAS[@]}"} | grep -qx 'lazyvim' && WANT_LAZYVIM=1
-
-# Credenciales sudo en cache para los pasos no interactivos del panel.
-if [ -n "$APT_PREFIX" ] && ui_interactive; then
-  if [ -n "$APT_PKGS" ] || [ -n "$CUSTOM_APT" ] || [ "$WANT_LAZYVIM" = "1" ]; then
-    sudo -v < /dev/tty 2>/dev/null || ui_warn "Sin credenciales sudo; los pasos con apt pueden fallar"
-  fi
+# Credenciales sudo antes del panel (la contraseña la maneja solo sudo por
+# el TTY real; nunca pasa por nui, variables o logs). Solo si falta algo.
+if [ -n "$APT_PREFIX" ] && ui_interactive && [ -n "$APT_PKGS" ]; then
+  sudo -v < /dev/tty 2>/dev/null || ui_warn "Sin credenciales sudo; los pasos con apt pueden fallar"
 fi
 
 # --- plan de pasos -------------------------------------------------------
@@ -92,29 +72,82 @@ echo "Dependencias base listas"
 EOF
 
 if [ "$SKIP_GIT_IDENTITY" != "1" ]; then
-  ui_panel_step "Identidad Git (SSH)" --interactive --estimate 20 <<'EOF'
-if [ -e /dev/tty ]; then
-  bash "$REPO_DIR/scripts/setup-git-identity.sh" < /dev/tty
-else
-  bash "$REPO_DIR/scripts/setup-git-identity.sh" < /dev/null
-fi
+  ui_panel_inputs <<'INPUTS'
+input p_name Nombre personal (GitHub):
+input p_email Email personal (GitHub):
+confirm nuxiba Configurar cuenta NUXIBA (Bitbucket)? n
+input n_name Nombre Nuxiba (Bitbucket):
+input n_email Email Nuxiba (Bitbucket):
+INPUTS
+  ui_panel_step "Identidad Git (SSH)" --optional --estimate 30 <<'EOF'
+bash "$REPO_DIR/scripts/setup-git-identity.sh"
 EOF
 else
   ui_panel_note "Identidad Git omitida (--skip-git)"
 fi
 
-if [ -n "$CUSTOM_APT" ]; then
-  ui_panel_step "Paquetes custom" --estimate 60 <<'EOF'
-if command -v apt-get >/dev/null 2>&1; then
-  echo "##log Instalando: ${CUSTOM_APT}"
-  ${APT_PREFIX}apt-get install -y ${CUSTOM_APT} >/dev/null 2>&1 || echo "##warn No se instalaron todos los custom"
-else
-  echo "##warn Instala manualmente: ${CUSTOM_APT}"
+ui_panel_inputs <<'INPUTS'
+select extras Paquetes custom (espacio para marcar, enter confirma) many
+option extras lazyvim
+option extras fzf
+option extras ripgrep
+option extras bat
+option extras eza
+option extras zoxide
+option extras fd-find
+option extras lazygit
+INPUTS
+ui_panel_step "Paquetes custom" --estimate 90 <<'EOF'
+if [ -z "${NUI_STEP_RESULT:-}" ] || [ ! -f "$NUI_STEP_RESULT" ]; then
+  echo "##log Sin selección (modo no interactivo); nada que instalar"
+  exit 0
 fi
+. "$NUI_STEP_RESULT"
+
+SELECTED="${extras:-}"
+if [ -z "$SELECTED" ]; then
+  echo "##log No se seleccionaron paquetes custom"
+  exit 0
+fi
+
+CUSTOM_APT=()
+for p in ${SELECTED}; do
+  case "$p" in
+    lazyvim) ;;
+    fd-find) command -v fd >/dev/null 2>&1 || CUSTOM_APT+=(fd-find) ;;
+    lazygit) command -v lazygit >/dev/null 2>&1 || CUSTOM_APT+=(lazygit) ;;
+    *) command -v "$p" >/dev/null 2>&1 || CUSTOM_APT+=("$p") ;;
+  esac
+done
+
+if [ ${#CUSTOM_APT[@]} -gt 0 ]; then
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "##log Instalando: ${CUSTOM_APT[*]}"
+    ${APT_PREFIX}apt-get install -y ${CUSTOM_APT[*]} >/dev/null 2>&1 \
+      || echo "##warn No se instalaron todos los paquetes custom"
+  else
+    echo "##warn Instala manualmente: ${CUSTOM_APT[*]}"
+  fi
+fi
+
+if printf '%s\n' ${SELECTED} | grep -qx 'lazyvim'; then
+  if ! command -v nvim >/dev/null 2>&1; then
+    echo "##log Instalando neovim"
+    ${APT_PREFIX}apt-get install -y neovim >/dev/null 2>&1 \
+      || echo "##warn No se pudo instalar neovim"
+  fi
+  if [ ! -d "$HOME/.config/nvim" ]; then
+    echo "##log Clonando LazyVim starter"
+    if git clone https://github.com/LazyVim/starter "$HOME/.config/nvim" >/dev/null 2>&1; then
+      rm -rf "$HOME/.config/nvim/.git"
+    else
+      echo "##warn No se pudo instalar LazyVim automáticamente"
+    fi
+  fi
+fi
+
+echo "Paquetes custom atendidos"
 EOF
-else
-  ui_panel_note "Paquetes custom: sin cambios pendientes"
-fi
 
 ui_panel_step "Node + nvm" --estimate 120 <<'EOF'
 export NVM_DIR="$HOME/.nvm"
@@ -216,24 +249,6 @@ if ! grep -q 'export PATH=.*\.local/bin' "$HOME/.bashrc" 2>/dev/null; then
 fi
 echo "herdr atendido"
 EOF
-
-if [ "$WANT_LAZYVIM" = "1" ]; then
-  ui_panel_step "Neovim / LazyVim" --estimate 90 <<'EOF'
-if ! command -v nvim >/dev/null 2>&1; then
-  echo "##log Instalando neovim"
-  ${APT_PREFIX}apt-get install -y neovim >/dev/null 2>&1 || echo "##warn No se pudo instalar neovim"
-fi
-if [ ! -d "$HOME/.config/nvim" ]; then
-  echo "##log Clonando LazyVim starter"
-  if git clone https://github.com/LazyVim/starter "$HOME/.config/nvim" >/dev/null 2>&1; then
-    rm -rf "$HOME/.config/nvim/.git"
-  else
-    echo "##warn No se pudo instalar LazyVim automáticamente"
-  fi
-fi
-echo "LazyVim atendido"
-EOF
-fi
 
 ui_panel_step "Wrappers" --estimate 10 <<'EOF'
 mkdir -p "$HOME/.local/bin"

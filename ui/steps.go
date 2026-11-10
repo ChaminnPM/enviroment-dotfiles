@@ -18,8 +18,10 @@ import (
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 )
 
 // ---------------------------------------------------------------- plan
@@ -32,11 +34,23 @@ import (
 //	##title texto      cambia el título visible del paso
 //	##warn texto       marca el paso como aviso y continúa
 type planStep struct {
-	Title       string `json:"title"`
-	Cmd         string `json:"cmd"`
-	Optional    bool   `json:"optional"`
-	Interactive bool   `json:"interactive"`
-	Estimate    int    `json:"estimate"` // segundos estimados (progreso automático)
+	Title       string      `json:"title"`
+	Cmd         string      `json:"cmd"`
+	Optional    bool        `json:"optional"`
+	Interactive bool        `json:"interactive"`
+	Estimate    int         `json:"estimate"` // segundos estimados (progreso automático)
+	Inputs      []planInput `json:"inputs"`   // formulario dentro del panel
+}
+
+// planInput es un campo del formulario que el panel pide antes de ejecutar
+// el paso. Los valores se guardan en $NUI_STATE_DIR/result-<N>.env.
+type planInput struct {
+	Type    string   `json:"type"` // input | password | confirm | select
+	Name    string   `json:"name"`
+	Prompt  string   `json:"prompt"`
+	Default string   `json:"default"`
+	Options []string `json:"options"`
+	Multi   bool     `json:"multi"`
 }
 
 type plan struct {
@@ -71,6 +85,20 @@ func loadPlan(path string) (plan, error) {
 		}
 		if p.Steps[i].Title == "" {
 			p.Steps[i].Title = fmt.Sprintf("Paso %d", i+1)
+		}
+		for _, in := range p.Steps[i].Inputs {
+			switch in.Type {
+			case "input", "password", "confirm":
+				if strings.TrimSpace(in.Name) == "" {
+					return plan{}, fmt.Errorf("paso %d: input sin nombre", i+1)
+				}
+			case "select":
+				if strings.TrimSpace(in.Name) == "" || len(in.Options) == 0 {
+					return plan{}, fmt.Errorf("paso %d: select inválido", i+1)
+				}
+			default:
+				return plan{}, fmt.Errorf("paso %d: tipo de input desconocido: %s", i+1, in.Type)
+			}
 		}
 	}
 	if p.Title == "" {
@@ -120,6 +148,7 @@ type (
 	}
 	stepTickMsg  struct{ idx int }
 	startStepMsg struct{ idx int }
+	quitNowMsg   struct{}
 	repaintMsg   struct{}
 )
 
@@ -184,11 +213,23 @@ type stepsModel struct {
 	startedAt time.Time
 	elapsed   time.Duration
 
-	logDir string
-	run    *runner
+	logDir   string
+	stateDir string
+	run      *runner
 
 	spinner  spinner.Model
 	progress progress.Model
+
+	// formulario dentro del panel
+	formActive bool
+	formIdx    int
+	formVals   map[string]string
+	formCursor int
+	formSel    map[int]bool
+	input      textinput.Model
+	confirmYes bool
+
+	reportScroll int
 }
 
 func newStepsModel(p plan, logDir string) stepsModel {
@@ -202,6 +243,10 @@ func newStepsModel(p plan, logDir string) stepsModel {
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(colAccent)
+
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.CharLimit = 512
 
 	steps := make([]runStep, len(p.Steps))
 	for i, s := range p.Steps {
@@ -218,6 +263,7 @@ func newStepsModel(p plan, logDir string) stepsModel {
 		startedAt: time.Now(),
 		spinner:   sp,
 		progress:  prog,
+		input:     ti,
 	}
 }
 
@@ -236,6 +282,12 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.formActive {
+			return m.handleFormKey(msg)
+		}
+		if m.finished {
+			return m.handleReportKey(msg)
+		}
 		return m.handleKey(msg)
 
 	case spinner.TickMsg:
@@ -245,6 +297,9 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case repaintMsg:
 		return m, nil
+
+	case quitNowMsg:
+		return m, tea.Quit
 
 	case startStepMsg:
 		return m.begin(msg.idx)
@@ -267,17 +322,28 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *stepsModel) markCanceled() {
+	if m.current >= 0 && m.current < len(m.steps) && m.steps[m.current].state == stRunning {
+		m.steps[m.current].state = stFailed
+		m.steps[m.current].note = "cancelado por el usuario"
+	}
+}
+
 func (m stepsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc", "ctrl+c":
 		if m.current >= 0 && m.steps[m.current].state == stRunning {
 			m.run.kill()
 		}
+		m.markCanceled()
+		m.canceled = true
 		if !m.finished {
-			m.canceled = true
+			m.finished = true
 			m.elapsed = time.Since(m.startedAt)
 		}
-		return m, tea.Quit
+		return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+			return quitNowMsg{}
+		})
 
 	case "?":
 		m.showHelp = !m.showHelp
@@ -302,6 +368,229 @@ func (m stepsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m stepsModel) handleReportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		if m.reportScroll > 0 {
+			m.reportScroll--
+		}
+	case "down", "j":
+		m.reportScroll++
+	case "pgup", "home":
+		m.reportScroll = 0
+	case "pgdown", "end":
+		m.reportScroll += 20
+	}
+	return m, nil
+}
+
+// ------------------------------------------------------------ formulario
+
+func (m stepsModel) startForm(idx int) (tea.Model, tea.Cmd) {
+	m.formActive = true
+	m.formIdx = 0
+	m.formVals = map[string]string{}
+	m.formSel = map[int]bool{}
+	m.prepareField(m.plan.Steps[idx].Inputs[0])
+	return m, nil
+}
+
+func (m *stepsModel) prepareField(in planInput) {
+	m.input.SetValue("")
+	m.input.Placeholder = in.Default
+	m.input.EchoMode = textinput.EchoNormal
+	if in.Type == "password" {
+		m.input.EchoMode = textinput.EchoPassword
+	}
+	if in.Default != "" && (in.Type == "input" || in.Type == "password") {
+		m.input.SetValue(in.Default)
+	}
+	if in.Type == "confirm" {
+		m.confirmYes = in.Default == "true" || in.Default == "y" || in.Default == "s"
+	}
+	if in.Type == "select" {
+		m.formCursor = 0
+		m.formSel = map[int]bool{}
+		if in.Default != "" {
+			for i, opt := range in.Options {
+				if opt == in.Default {
+					m.formSel[i] = true
+					m.formCursor = i
+				}
+			}
+		}
+	}
+	m.input.Focus()
+}
+
+func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	idx := m.current
+	if idx < 0 || idx >= len(m.plan.Steps) || m.formIdx >= len(m.plan.Steps[idx].Inputs) {
+		m.formActive = false
+		return m, nil
+	}
+	in := m.plan.Steps[idx].Inputs[m.formIdx]
+
+	switch msg.String() {
+	case "ctrl+c":
+		m.formActive = false
+		m.markCanceled()
+		m.canceled = true
+		m.finished = true
+		m.elapsed = time.Since(m.startedAt)
+		return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+			return quitNowMsg{}
+		})
+	case "esc":
+		m.formActive = false
+		if m.plan.Steps[idx].Optional {
+			m.skipStep(idx, "omitido por el usuario")
+			return m.nextAfter(idx)
+		}
+		m.markCanceled()
+		m.canceled = true
+		m.finished = true
+		m.elapsed = time.Since(m.startedAt)
+		return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+			return quitNowMsg{}
+		})
+	}
+
+	switch in.Type {
+	case "input", "password":
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		if msg.String() == "enter" {
+			m.formVals[in.Name] = m.input.Value()
+			return m.advanceForm(idx)
+		}
+		return m, cmd
+
+	case "confirm":
+		switch msg.String() {
+		case "left", "right", "h", "l", "tab":
+			m.confirmYes = !m.confirmYes
+		case "y", "Y", "s", "S":
+			m.confirmYes = true
+			m.formVals[in.Name] = "true"
+			return m.advanceForm(idx)
+		case "n", "N":
+			m.confirmYes = false
+			m.formVals[in.Name] = "false"
+			return m.advanceForm(idx)
+		case "enter":
+			m.formVals[in.Name] = strconv.FormatBool(m.confirmYes)
+			return m.advanceForm(idx)
+		}
+
+	case "select":
+		switch msg.String() {
+		case "up", "k":
+			if m.formCursor > 0 {
+				m.formCursor--
+			}
+		case "down", "j":
+			if m.formCursor < len(in.Options)-1 {
+				m.formCursor++
+			}
+		case " ":
+			if in.Multi {
+				if m.formSel[m.formCursor] {
+					delete(m.formSel, m.formCursor)
+				} else {
+					m.formSel[m.formCursor] = true
+				}
+			} else {
+				m.formSel = map[int]bool{m.formCursor: true}
+			}
+		case "enter":
+			var vals []string
+			for i, opt := range in.Options {
+				if m.formSel[i] {
+					vals = append(vals, opt)
+				}
+			}
+			m.formVals[in.Name] = strings.Join(vals, "\n")
+			return m.advanceForm(idx)
+		}
+	}
+	return m, nil
+}
+
+func (m stepsModel) advanceForm(idx int) (tea.Model, tea.Cmd) {
+	inputs := m.plan.Steps[idx].Inputs
+	if m.formIdx+1 >= len(inputs) {
+		return m.finishForm(idx)
+	}
+	m.formIdx++
+	m.prepareField(inputs[m.formIdx])
+	return m, nil
+}
+
+func (m stepsModel) finishForm(idx int) (tea.Model, tea.Cmd) {
+	m.formActive = false
+	m.saveResults(idx)
+	ps := m.plan.Steps[idx]
+	if ps.Interactive {
+		c := exec.Command("bash", "-c", ps.Cmd)
+		c.Env = m.stepEnv("TERM=xterm-256color")
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			return stepDoneMsg{idx: idx, err: err}
+		})
+	}
+	m.execStep(idx)
+	return m, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+		return stepTickMsg{idx: idx}
+	})
+}
+
+func (m *stepsModel) skipStep(idx int, note string) {
+	m.steps[idx].state = stSkipped
+	m.steps[idx].note = note
+	m.steps[idx].percent = 1
+}
+
+func (m stepsModel) nextAfter(idx int) (tea.Model, tea.Cmd) {
+	m.current = -1
+	if idx+1 < len(m.steps) {
+		return m, tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg {
+			return startStepMsg{idx: idx + 1}
+		})
+	}
+	m.finished = true
+	m.elapsed = time.Since(m.startedAt)
+	return m, nil
+}
+
+// saveResults escribe los valores del formulario en $NUI_STATE_DIR.
+func (m stepsModel) saveResults(idx int) {
+	if m.stateDir == "" {
+		return
+	}
+	_ = os.MkdirAll(m.stateDir, 0o755)
+	var b strings.Builder
+	for _, in := range m.plan.Steps[idx].Inputs {
+		b.WriteString(in.Name + "=" + shellQuote(m.formVals[in.Name]) + "\n")
+	}
+	_ = os.WriteFile(filepath.Join(m.stateDir, fmt.Sprintf("result-%02d.env", idx+1)),
+		[]byte(b.String()), 0o600)
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func (m stepsModel) stepEnv(extra ...string) []string {
+	env := append(os.Environ(), "TERM=dumb", "NO_COLOR=1", "CLICOLOR=0")
+	if m.stateDir != "" {
+		env = append(env, "NUI_STATE_DIR="+m.stateDir,
+			fmt.Sprintf("NUI_STEP_RESULT=%s", filepath.Join(m.stateDir, fmt.Sprintf("result-%02d.env", m.current+1))))
+	}
+	return append(env, extra...)
+}
+
 // begin arranca el paso idx: interactivo (cede la terminal) o con panel en vivo.
 func (m stepsModel) begin(idx int) (tea.Model, tea.Cmd) {
 	if idx < 0 || idx >= len(m.plan.Steps) {
@@ -317,9 +606,12 @@ func (m stepsModel) begin(idx int) (tea.Model, tea.Cmd) {
 	m.cursor = idx
 
 	ps := m.plan.Steps[idx]
+	if len(ps.Inputs) > 0 {
+		return m.startForm(idx)
+	}
 	if ps.Interactive {
 		c := exec.Command("bash", "-c", ps.Cmd)
-		c.Env = append(os.Environ(), "TERM=xterm-256color")
+		c.Env = m.stepEnv("TERM=xterm-256color")
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return stepDoneMsg{idx: idx, err: err}
 		})
@@ -341,7 +633,7 @@ func (m *stepsModel) execStep(idx int) {
 	}
 
 	c := exec.Command("bash", "-c", ps.Cmd)
-	c.Env = append(os.Environ(), "TERM=dumb", "NO_COLOR=1", "CLICOLOR=0")
+	c.Env = m.stepEnv()
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	pr, pw := io.Pipe()
@@ -557,10 +849,19 @@ func (m stepsModel) View() string {
 	leftW := clampInt(int(float64(m.width)*0.40), 28, 40)
 	rightW := m.width - leftW - 2
 
+	var right string
+	switch {
+	case m.formActive:
+		right = m.viewForm(rightW, bodyH)
+	case m.finished:
+		right = m.viewReport(rightW, bodyH)
+	default:
+		right = m.viewPanel(rightW, bodyH)
+	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
 		m.viewSteps(leftW, bodyH),
 		"  ",
-		m.viewPanel(rightW, bodyH),
+		right,
 	)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -702,6 +1003,178 @@ func (m stepsModel) viewPanel(w, h int) string {
 	return stPanelBox.Width(w - 2).Height(h - 2).Render(content)
 }
 
+// ------------------------------------------------------------ formulario
+
+func (m stepsModel) viewForm(w, h int) string {
+	innerW := maxInt(0, w-4)
+	innerH := maxInt(0, h-2)
+	idx := m.current
+	if idx < 0 || idx >= len(m.plan.Steps) {
+		return ""
+	}
+	ps := m.plan.Steps[idx]
+	if m.formIdx >= len(ps.Inputs) {
+		return ""
+	}
+
+	lines := []string{
+		stHeader.Render(truncate(ps.Title+" · formulario", innerW)),
+		"",
+	}
+	for i, in := range ps.Inputs {
+		active := i == m.formIdx
+		prefix := "  "
+		if active {
+			prefix = stCursor.Render("> ")
+		}
+		prompt := in.Prompt
+		if active {
+			prompt = stTitleRun.Render(truncate(prompt, innerW-2))
+		} else {
+			prompt = stTitlePend.Render(truncate(prompt, innerW-2))
+		}
+		lines = append(lines, prefix+prompt)
+
+		switch in.Type {
+		case "input", "password":
+			disp := m.formVals[in.Name]
+			if active {
+				disp = m.input.Value()
+			}
+			if in.Type == "password" && disp != "" {
+				disp = strings.Repeat("•", len([]rune(disp)))
+			}
+			if disp == "" {
+				disp = in.Default
+			}
+			style := stLogLine
+			if active {
+				style = stTitleRun
+			}
+			lines = append(lines, prefix+"  "+stBracket.Render("[")+
+				style.Render(truncate(disp, maxInt(0, innerW-4)))+stBracket.Render("]"))
+			if active {
+				lines = append(lines, "")
+			}
+
+		case "confirm":
+			yes, no := stPendMark.Render("[ ] sí"), stPendMark.Render("[ ] no")
+			if m.confirmYes {
+				yes = stDoneMark.Render("[x] sí")
+			} else {
+				no = stDoneMark.Render("[x] no")
+			}
+			lines = append(lines, prefix+"  "+yes+"  "+no)
+			if active {
+				lines = append(lines, "")
+			}
+
+		case "select":
+			maxOpts := innerH - 10
+			if maxOpts < 5 {
+				maxOpts = 5
+			}
+			start, end := 0, len(in.Options)
+			if len(in.Options) > maxOpts {
+				start = 0
+				if m.formCursor >= maxOpts {
+					start = m.formCursor - maxOpts + 1
+				}
+				end = start + maxOpts
+				if end > len(in.Options) {
+					end = len(in.Options)
+					start = maxInt(0, end-maxOpts)
+				}
+			}
+			for oi := start; oi < end; oi++ {
+				mark := stPendMark.Render("[ ]")
+				if m.formSel[oi] {
+					mark = stDoneMark.Render("[x]")
+				}
+				cur := "  "
+				if active && oi == m.formCursor {
+					cur = stCursor.Render("> ")
+				}
+				lines = append(lines, prefix+"  "+cur+mark+" "+
+					stLogLine.Render(truncate(in.Options[oi], maxInt(0, innerW-8))))
+			}
+			if len(in.Options) > maxOpts {
+				lines = append(lines, stFaint.Render(truncate(
+					fmt.Sprintf("  mostrando %d-%d de %d · ↑/↓ para moverse", start+1, end, len(in.Options)), innerW)))
+			}
+			if active {
+				lines = append(lines, "")
+			}
+		}
+	}
+
+	hint := "[enter] continuar · [espacio] marcar · [esc] cancelar"
+	if ps.Optional {
+		hint = "[enter] continuar · [espacio] marcar · [esc] omitir"
+	}
+	lines = append(lines, stFaint.Render(truncate(hint, innerW)))
+
+	maxLines := maxInt(1, innerH-2)
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	return stPanelBox.Width(w - 2).Height(h - 2).Render(strings.Join(lines, "\n"))
+}
+
+// ------------------------------------------------------------ reporte
+
+func (m stepsModel) viewReport(w, h int) string {
+	innerW := maxInt(0, w-4)
+	innerH := maxInt(0, h-2)
+	oks, warns, errs, infos := m.reportData()
+
+	head := stHeaderOK.Render("Instalación completada")
+	switch {
+	case m.canceled:
+		head = stHeaderWr.Render("Instalación cancelada por el usuario")
+	case len(errs) > 0:
+		head = stHeaderEr.Render("Instalación con errores")
+	case len(warns) > 0:
+		head = stHeaderWr.Render("Instalación con avisos")
+	}
+
+	lines := []string{head, ""}
+	addSection := func(label string, color lipgloss.TerminalColor, items []string, symbol string) {
+		if len(items) == 0 {
+			return
+		}
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(color).
+			Render(fmt.Sprintf("%s (%d)", label, len(items))))
+		for _, it := range items {
+			lines = append(lines, "  "+lipgloss.NewStyle().Bold(true).Foreground(color).
+				Render(symbol)+" "+stLogLine.Render(truncate(it, maxInt(0, innerW-4))))
+		}
+		lines = append(lines, "")
+	}
+	addSection("INSTALADO", colGreen, oks, "✓")
+	addSection("AVISOS", colYellow, warns, "!")
+	addSection("ERRORES", colRed, errs, "✗")
+	for _, in := range infos {
+		lines = append(lines, stFaint.Render(truncate(in, innerW)))
+	}
+
+	maxLines := maxInt(1, innerH-2)
+	scroll := m.reportScroll
+	if scroll < 0 {
+		scroll = 0
+	}
+	if scroll > len(lines)-maxLines {
+		scroll = maxInt(0, len(lines)-maxLines)
+	}
+	if len(lines) > maxLines {
+		lines = lines[scroll:]
+		if len(lines) > maxLines {
+			lines = lines[:maxLines]
+		}
+	}
+	return stPanelBox.Width(w - 2).Height(h - 2).Render(strings.Join(lines, "\n"))
+}
+
 func (m stepsModel) panelTitle(cur runStep) (string, lipgloss.Style) {
 	switch {
 	case m.canceled:
@@ -729,23 +1202,41 @@ func (m stepsModel) viewIndex() int {
 		return m.current
 	}
 	if m.finished {
+		if i := m.firstState(stFailed); i >= 0 {
+			return i
+		}
 		return len(m.steps) - 1
 	}
 	return m.cursor
 }
 
+func (m stepsModel) firstState(s stepState) int {
+	for i, st := range m.steps {
+		if st.state == s {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m stepsModel) viewFooter() string {
+	if m.formActive {
+		hint := "[enter] continuar · [esc] cancelar"
+		if m.current >= 0 && m.plan.Steps[m.current].Optional {
+			hint = "[enter] continuar · [esc] omitir"
+		}
+		return lipgloss.NewStyle().MaxWidth(m.width).Render(
+			" " + stFootTxt.Render(truncate(hint, m.width-1)))
+	}
+
 	title := shorten(m.plan.Title)
-	if m.finished || m.canceled {
-		title = "Logs: " + m.logDir
-	}
-	keys := [][2]string{{"↑/↓", "navegar"}, {"enter", "detalle"}}
+	var keys [][2]string
 	if m.finished {
-		keys = append(keys, [2]string{"q", "salir"})
+		title = "Logs: " + m.logDir
+		keys = [][2]string{{"↑/↓", "desplazar"}, {"q", "salir"}, {"?", "ayuda"}}
 	} else {
-		keys = append(keys, [2]string{"q", "cancelar"})
+		keys = [][2]string{{"↑/↓", "navegar"}, {"enter", "detalle"}, {"q", "cancelar"}, {"?", "ayuda"}}
 	}
-	keys = append(keys, [2]string{"?", "ayuda"})
 
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
@@ -803,11 +1294,11 @@ func (m stepsModel) countState(s stepState) int {
 
 // ---------------------------------------------------------------- informe
 
-// report imprime el reporte final y devuelve el código de salida.
-func (m stepsModel) report() int {
+// reportData construye las secciones del reporte final.
+func (m stepsModel) reportData() ([]string, []string, []string, []string) {
 	oks, warns, errs, infos := []string{}, []string{}, []string{}, []string{}
-	for i, st := range m.steps {
-		title := fmt.Sprintf("%s", st.title)
+	for _, st := range m.steps {
+		title := st.title
 		switch st.state {
 		case stDone:
 			oks = append(oks, title)
@@ -824,7 +1315,9 @@ func (m stepsModel) report() int {
 			}
 			errs = append(errs, fmt.Sprintf("%s: %s", title, note))
 		case stSkipped:
-			_ = i
+			if st.note != "" {
+				warns = append(warns, fmt.Sprintf("%s: %s", title, st.note))
+			}
 		}
 	}
 	if m.canceled {
@@ -834,12 +1327,12 @@ func (m stepsModel) report() int {
 		fmt.Sprintf("Duración: %s", shortDur(m.elapsed)),
 		"Logs: "+m.logDir)
 	infos = append(infos, m.plan.Notes...)
+	return oks, warns, errs, infos
+}
 
-	failed := printReport(m.plan.Title+" · REPORTE FINAL", oks, warns, errs, infos)
-	if failed {
-		return 1
-	}
-	return 0
+func (m stepsModel) hasErrors() bool {
+	_, _, errs, _ := m.reportData()
+	return len(errs) > 0
 }
 
 // ---------------------------------------------------------------- ejecución
@@ -895,12 +1388,21 @@ func cmdSteps(args []string) int {
 
 	in, out, tty := tuiIO()
 	w, h := termSize(out)
+
+	stateDir, err := os.MkdirTemp("", "nui-steps-state-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "nui steps:", err)
+		return 1
+	}
+	defer os.RemoveAll(stateDir)
+
 	if plain || !tty || w < 64 || h < 14 {
-		return runPlanPlain(p, logDir)
+		return runPlanPlain(p, logDir, stateDir)
 	}
 
 	stepsProgram = nil
 	m := newStepsModel(p, logDir)
+	m.stateDir = stateDir
 	prog := tea.NewProgram(m,
 		tea.WithInput(in),
 		tea.WithOutput(out),
@@ -918,7 +1420,10 @@ func cmdSteps(args []string) int {
 	if !ok {
 		return 1
 	}
-	return fm.report()
+	if fm.hasErrors() {
+		return 1
+	}
+	return 0
 }
 
 // stepsProgram permite que los lectores envíen líneas al event loop.
@@ -933,7 +1438,7 @@ func defaultLogDir() string {
 }
 
 // runPlanPlain ejecuta el plan sin TUI (verbose, CI o terminal pequeña).
-func runPlanPlain(p plan, logDir string) int {
+func runPlanPlain(p plan, logDir, stateDir string) int {
 	oks, warns, errs := []string{}, []string{}, []string{}
 	start := time.Now()
 
@@ -942,12 +1447,19 @@ func runPlanPlain(p plan, logDir string) int {
 
 	for i, ps := range p.Steps {
 		fmt.Printf("\n\033[1m== [%d/%d] %s ==\033[0m\n", i+1, len(p.Steps), ps.Title)
+		promptInputs(stateDir, i, ps.Inputs)
 
 		c := exec.Command("bash", "-c", ps.Cmd)
-		c.Env = append(os.Environ(), "TERM=dumb")
+		env := append(os.Environ(), "TERM=dumb")
+		if stateDir != "" {
+			env = append(env, "NUI_STATE_DIR="+stateDir,
+				fmt.Sprintf("NUI_STEP_RESULT=%s", filepath.Join(stateDir, fmt.Sprintf("result-%02d.env", i+1))))
+		}
+		c.Env = env
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		c.Stdin = os.Stdin
 
+		warned := false
 		var err error
 		if ps.Interactive {
 			c.Stdout, c.Stderr = os.Stdout, os.Stderr
@@ -973,6 +1485,7 @@ func runPlanPlain(p plan, logDir string) int {
 						fmt.Println(rest)
 					case "warn":
 						fmt.Println("[WARN] " + rest)
+						warned = true
 					case "title", "progress":
 					default:
 						if l := cleanLine(line); l != "" {
@@ -1001,7 +1514,11 @@ func runPlanPlain(p plan, logDir string) int {
 			fmt.Println("[ERROR] " + errText(err))
 			break
 		}
-		oks = append(oks, ps.Title)
+		if warned {
+			warns = append(warns, ps.Title)
+		} else {
+			oks = append(oks, ps.Title)
+		}
 	}
 
 	printReport(p.Title+" · REPORTE FINAL", oks, warns, errs,
@@ -1010,6 +1527,83 @@ func runPlanPlain(p plan, logDir string) int {
 		return 1
 	}
 	return 0
+}
+
+// promptInputs pide los campos del paso por stdin y escribe result-<N>.env.
+func promptInputs(stateDir string, idx int, inputs []planInput) {
+	if len(inputs) == 0 || stateDir == "" {
+		return
+	}
+	_ = os.MkdirAll(stateDir, 0o755)
+	var b strings.Builder
+	for _, in := range inputs {
+		val := in.Default
+		switch in.Type {
+		case "input", "password":
+			fmt.Printf("\n%s", in.Prompt)
+			if in.Default != "" {
+				fmt.Printf(" [%s]", in.Default)
+			}
+			fmt.Print(" ")
+			if in.Type == "password" && term.IsTerminal(int(os.Stdin.Fd())) {
+				pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Println()
+				if err == nil {
+					val = string(pw)
+				}
+			} else {
+				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				val = strings.TrimRight(line, "\r\n")
+			}
+			if val == "" {
+				val = in.Default
+			}
+		case "confirm":
+			fmt.Printf("\n%s [s/n] (%s): ", in.Prompt, defaultYesNo(in.Default))
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			line = strings.ToLower(strings.TrimSpace(line))
+			if line == "" {
+				line = defaultYesNo(in.Default)
+			}
+			val = "false"
+			if line == "s" || line == "si" || line == "sí" || line == "y" || line == "yes" || line == "true" {
+				val = "true"
+			}
+		case "select":
+			fmt.Printf("\n%s\n", in.Prompt)
+			for oi, opt := range in.Options {
+				fmt.Printf("  %2d) %s\n", oi+1, opt)
+			}
+			fmt.Print("Selección (números separados por espacio): ")
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			var picked []string
+			for _, f := range strings.Fields(line) {
+				n, err := strconv.Atoi(f)
+				if err != nil || n < 1 || n > len(in.Options) {
+					continue
+				}
+				picked = append(picked, in.Options[n-1])
+				if !in.Multi {
+					break
+				}
+			}
+			if len(picked) == 0 {
+				picked = strings.Fields(in.Default)
+			}
+			val = strings.Join(picked, "\n")
+		}
+		b.WriteString(in.Name + "=" + shellQuote(val) + "\n")
+	}
+	_ = os.WriteFile(filepath.Join(stateDir, fmt.Sprintf("result-%02d.env", idx+1)),
+		[]byte(b.String()), 0o600)
+}
+
+func defaultYesNo(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "s", "si", "sí", "y", "yes":
+		return "s"
+	}
+	return "n"
 }
 
 // ---------------------------------------------------------------- utilidades
