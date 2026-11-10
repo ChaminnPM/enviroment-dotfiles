@@ -134,9 +134,14 @@ if [ -z "${NUI_STEP_RESULT:-}" ] || [ ! -f "$NUI_STEP_RESULT" ]; then
 fi
 . "$NUI_STEP_RESULT"
 
+show_key() {
+  local file="${1:-$HOME/.ssh/id_ed25519_personal.pub}"
+  echo "##log Clave publica:"
+  while IFS= read -r l; do echo "##log $l"; done < "$file" 2>/dev/null || true
+}
+
 if [ "${mostrar:-false}" = "true" ]; then
-  echo "##log Clave publica personal:"
-  while IFS= read -r l; do echo "##log $l"; done < "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null || true
+  show_key
 fi
 
 if [ "${probar:-true}" != "true" ]; then
@@ -156,9 +161,13 @@ ssh_test() {
   echo "##log $title falla (revisa que la clave este agregada)"
   return 1
 }
-ssh_test "SSH GitHub" git@github.com || true
+if ! ssh_test "SSH GitHub" git@github.com; then
+  [ "${mostrar:-false}" = "true" ] || show_key "$HOME/.ssh/id_ed25519_personal.pub"
+fi
 if [ -f "$HOME/.ssh/id_ed25519_nuxiba.pub" ]; then
-  ssh_test "SSH Bitbucket" git@bitbucket-nuxiba || true
+  if ! ssh_test "SSH Bitbucket" git@bitbucket-nuxiba; then
+    [ "${mostrar:-false}" = "true" ] || show_key "$HOME/.ssh/id_ed25519_nuxiba.pub"
+  fi
 fi
 echo "##log Prueba SSH finalizada"
 EOF

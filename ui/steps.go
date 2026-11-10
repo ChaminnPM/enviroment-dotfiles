@@ -393,6 +393,12 @@ func (m stepsModel) startForm(idx int) (tea.Model, tea.Cmd) {
 	m.formIdx = 0
 	m.formVals = map[string]string{}
 	m.formSel = map[int]bool{}
+	for _, in := range m.plan.Steps[idx].Inputs {
+		if in.Type == "confirm" {
+			def := in.Default == "true" || in.Default == "y" || in.Default == "s"
+			m.formVals[in.Name] = strconv.FormatBool(def)
+		}
+	}
 	m.prepareField(m.plan.Steps[idx].Inputs[0])
 	return m, nil
 }
@@ -409,6 +415,7 @@ func (m *stepsModel) prepareField(in planInput) {
 	}
 	if in.Type == "confirm" {
 		m.confirmYes = in.Default == "true" || in.Default == "y" || in.Default == "s"
+		m.formVals[in.Name] = strconv.FormatBool(m.confirmYes)
 	}
 	if in.Type == "select" {
 		m.formCursor = 0
@@ -470,8 +477,10 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "confirm":
 		switch msg.String() {
-		case "left", "right", "h", "l", "tab":
-			m.confirmYes = !m.confirmYes
+		case "left", "right", "h", "l", "tab", " ", "x":
+			cur := m.formVals[in.Name] == "true"
+			m.confirmYes = !cur
+			m.formVals[in.Name] = strconv.FormatBool(m.confirmYes)
 		case "y", "Y", "s", "S":
 			m.confirmYes = true
 			m.formVals[in.Name] = "true"
@@ -1059,7 +1068,7 @@ func (m stepsModel) viewForm(w, h int) string {
 
 		case "confirm":
 			yes, no := stPendMark.Render("[ ] sí"), stPendMark.Render("[ ] no")
-			if m.confirmYes {
+			if m.formVals[in.Name] == "true" {
 				yes = stDoneMark.Render("[x] sí")
 			} else {
 				no = stDoneMark.Render("[x] no")
