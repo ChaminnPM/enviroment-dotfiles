@@ -95,7 +95,7 @@ if [ -n "${APT_PKGS:-}" ]; then
     echo "##log Actualizando indices"
     apt_run update || true
     echo "##log Instalando: ${APT_PKGS}"
-    if ! apt_run install -y ${APT_PKGS}; then
+    if ! apt_run install -y --no-install-recommends ${APT_PKGS}; then
       echo "##warn No se pudieron instalar: ${APT_PKGS}"
     fi
   else
@@ -211,9 +211,16 @@ done
 
 if [ ${#CUSTOM_APT[@]} -gt 0 ]; then
   if command -v apt-get >/dev/null 2>&1; then
-    echo "##log Instalando: ${CUSTOM_APT[*]}"
-    ${APT_PREFIX}apt-get install -y ${CUSTOM_APT[*]} >/dev/null 2>&1 \
-      || echo "##warn No se instalaron todos los paquetes custom"
+    total=${#CUSTOM_APT[@]}
+    i=0
+    for pkg in "${CUSTOM_APT[@]}"; do
+      i=$((i + 1))
+      echo "##log Instalando ($i/$total): $pkg"
+      if ! ${APT_PREFIX}apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+        echo "##warn No se pudo instalar $pkg"
+      fi
+      echo "##progress $((i * 100 / total))"
+    done
   else
     echo "##warn Instala manualmente: ${CUSTOM_APT[*]}"
   fi
@@ -222,7 +229,7 @@ fi
 if printf '%s\n' ${SELECTED} | grep -qx 'lazyvim'; then
   if ! command -v nvim >/dev/null 2>&1; then
     echo "##log Instalando neovim"
-    ${APT_PREFIX}apt-get install -y neovim >/dev/null 2>&1 \
+    ${APT_PREFIX}apt-get install -y --no-install-recommends neovim >/dev/null 2>&1 \
       || echo "##warn No se pudo instalar neovim"
   fi
   if [ ! -d "$HOME/.config/nvim" ]; then

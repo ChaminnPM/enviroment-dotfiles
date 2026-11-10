@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 )
 
@@ -126,12 +127,13 @@ const (
 )
 
 type runStep struct {
-	title   string
-	state   stepState
-	percent float64
-	logs    []string
-	note    string
-	started time.Time
+	title    string
+	state    stepState
+	percent  float64
+	realProg bool // el script emitio ##progress (no estimar con la curva)
+	logs     []string
+	note     string
+	started  time.Time
 }
 
 const (
@@ -317,7 +319,7 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.advanceProgress(msg.idx)
-		return m, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+		return m, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
 			return stepTickMsg{idx: msg.idx}
 		})
 
@@ -346,9 +348,9 @@ func (m stepsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.finished = true
 			m.elapsed = time.Since(m.startedAt)
 		}
-		return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+		return m, tea.Batch(tea.ClearScreen, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
 			return quitNowMsg{}
-		})
+		}))
 
 	case "?":
 		m.showHelp = !m.showHelp
@@ -452,9 +454,9 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.canceled = true
 		m.finished = true
 		m.elapsed = time.Since(m.startedAt)
-		return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+		return m, tea.Batch(tea.ClearScreen, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
 			return quitNowMsg{}
-		})
+		}))
 	case "esc":
 		m.formActive = false
 		if m.plan.Steps[idx].Optional {
@@ -465,9 +467,9 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.canceled = true
 		m.finished = true
 		m.elapsed = time.Since(m.startedAt)
-		return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+		return m, tea.Batch(tea.ClearScreen, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
 			return quitNowMsg{}
-		})
+		}))
 	}
 
 	switch in.Type {
@@ -560,9 +562,9 @@ func (m stepsModel) finishForm(idx int) (tea.Model, tea.Cmd) {
 		})
 	}
 	m.execStep(idx)
-	return m, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+	return m, tea.Batch(tea.ClearScreen, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
 		return stepTickMsg{idx: idx}
-	})
+	}))
 }
 
 func (m *stepsModel) skipStep(idx int, note string) {
@@ -580,7 +582,7 @@ func (m stepsModel) nextAfter(idx int) (tea.Model, tea.Cmd) {
 	}
 	m.finished = true
 	m.elapsed = time.Since(m.startedAt)
-	return m, nil
+	return m, tea.ClearScreen
 }
 
 // saveResults escribe los valores del formulario en $NUI_STATE_DIR.
@@ -637,9 +639,9 @@ func (m stepsModel) begin(idx int) (tea.Model, tea.Cmd) {
 	}
 
 	m.execStep(idx)
-	return m, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+	return m, tea.Batch(tea.ClearScreen, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
 		return stepTickMsg{idx: idx}
-	})
+	}))
 }
 
 // execStep lanza el comando y transmite su salida al panel línea a línea.
@@ -712,6 +714,7 @@ func (m stepsModel) applyLine(msg lineMsg) (tea.Model, tea.Cmd) {
 	case "progress":
 		if v, err := strconv.ParseFloat(strings.TrimSpace(rest), 64); err == nil {
 			st.percent = clampPct(v / 100)
+			st.realProg = true
 		}
 		return m, nil
 	case "log":
@@ -771,7 +774,7 @@ func (m stepsModel) finishStep(msg stepDoneMsg) (tea.Model, tea.Cmd) {
 		}
 		m.finished = true
 		m.elapsed = time.Since(m.startedAt)
-		return m, nil
+		return m, tea.ClearScreen
 	}
 
 	if msg.idx+1 < len(m.steps) {
@@ -781,13 +784,13 @@ func (m stepsModel) finishStep(msg stepDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.finished = true
 	m.elapsed = time.Since(m.startedAt)
-	return m, nil
+	return m, tea.ClearScreen
 }
 
 // advanceProgress estima el avance con el tiempo transcurrido y la estimación.
 func (m *stepsModel) advanceProgress(idx int) {
 	st := &m.steps[idx]
-	if st.state != stRunning || st.percent >= 0.97 {
+	if st.state != stRunning || st.realProg || st.percent >= 0.97 {
 		return
 	}
 	estimate := float64(m.plan.Steps[idx].Estimate)
@@ -861,7 +864,7 @@ func (m stepsModel) View() string {
 		return ""
 	}
 	if m.showHelp {
-		return m.viewHelp()
+		return normalizeView(m.viewHelp(), m.width, m.height)
 	}
 
 	bodyH := m.height - 2
@@ -878,16 +881,33 @@ func (m stepsModel) View() string {
 		right = m.viewPanel(rightW, bodyH)
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.viewSteps(leftW, bodyH),
+		normalizeView(m.viewSteps(leftW, bodyH), leftW, bodyH),
 		"  ",
-		right,
+		normalizeView(right, rightW, bodyH),
 	)
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	out := lipgloss.JoinVertical(lipgloss.Left,
 		body,
 		stRule.Render(strings.Repeat("─", m.width)),
 		m.viewFooter(),
 	)
+	// Normaliza alto/ancho para que el renderer nunca superponga frames.
+	return normalizeView(out, m.width, m.height)
+}
+
+// normalizeView garantiza exactamente h lineas y ancho <= w por linea.
+func normalizeView(s string, w, h int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, w, "")
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m stepsModel) viewSteps(w, h int) string {
@@ -1822,11 +1842,7 @@ func truncate(s string, w int) string {
 	if w <= 1 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= w {
-		return s
-	}
-	return string(r[:w-1]) + "…"
+	return ansi.Truncate(s, w, "…")
 }
 
 func tailLines(s []string, n int) []string {
