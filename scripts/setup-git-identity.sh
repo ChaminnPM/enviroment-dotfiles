@@ -93,16 +93,16 @@ fi
 
 if [ "$NUXIBA_ENABLED" = "1" ]; then
   if [ -z "$N_NAME" ] || [ -z "$N_EMAIL" ]; then
-    say "Cuenta Nuxiba omitida (nombre/email vacíos)."
-    NUXIBA_ENABLED=0
-  else
-    if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
-      say "Generando clave Nuxiba..."
-      run_cmd "ssh-keygen -t ed25519 -C '$N_EMAIL' -f '$HOME/.ssh/id_ed25519_nuxiba' -N '' >/dev/null 2>&1" || {
-        say "No se pudo generar la clave Nuxiba."
-        NUXIBA_ENABLED=0
-      }
-    fi
+    N_NAME="${N_NAME:-$P_NAME}"
+    N_EMAIL="${N_EMAIL:-$P_EMAIL}"
+    say "Nuxiba: no se indicaron nombre/email; se usan los personales."
+  fi
+  if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
+    say "Generando clave Nuxiba..."
+    run_cmd "ssh-keygen -t ed25519 -C '$N_EMAIL' -f '$HOME/.ssh/id_ed25519_nuxiba' -N '' >/dev/null 2>&1" || {
+      say "No se pudo generar la clave Nuxiba."
+      NUXIBA_ENABLED=0
+    }
   fi
 fi
 

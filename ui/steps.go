@@ -1134,7 +1134,7 @@ func (m stepsModel) viewForm(w, h int) string {
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				lines = append(lines, prefix+"  "+stFaint.Render(truncate("(no se pudo leer "+in.Path+")", maxInt(0, innerW-4))))
+				lines = append(lines, prefix+"  "+stFaint.Render(truncate("(sin generar: el paso de identidad no creo esta clave)", maxInt(0, innerW-4))))
 			} else {
 				text := strings.TrimRight(string(data), "\n")
 				ww := maxInt(8, innerW-4)
@@ -1624,7 +1624,7 @@ func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader
 			if data, err := os.ReadFile(path); err == nil {
 				fmt.Print(string(data))
 			} else {
-				fmt.Printf("(no se pudo leer %s)\n", in.Path)
+				fmt.Printf("(sin generar: el paso de identidad no creo esta clave)\n")
 			}
 			fmt.Print("Pulsa enter para continuar... ")
 			_, _ = rd.ReadString('\n')

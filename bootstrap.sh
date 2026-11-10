@@ -125,6 +125,7 @@ EOF
 
   ui_panel_inputs <<INPUTS
 key pub_key $HOME/.ssh/id_ed25519_personal.pub Clave publica personal (copiala y pulsa enter):
+key pub_key_nuxiba $HOME/.ssh/id_ed25519_nuxiba.pub Clave publica Nuxiba/Bitbucket (copiala y pulsa enter):
 confirm probar Probar conexion SSH ahora? y
 INPUTS
   ui_panel_step "Probar llaves SSH" --optional --estimate 30 <<'EOF'
@@ -164,6 +165,9 @@ if [ -f "$HOME/.ssh/id_ed25519_nuxiba.pub" ]; then
   if ! ssh_test "SSH Bitbucket" git@bitbucket-nuxiba; then
     show_key "$HOME/.ssh/id_ed25519_nuxiba.pub"
   fi
+else
+  echo "##log No hay clave Nuxiba (~/.ssh/id_ed25519_nuxiba.pub); prueba de Bitbucket omitida."
+  echo "##log Si la necesitas, configura la cuenta NUXIBA en el paso de identidad."
 fi
 echo "##log Prueba SSH finalizada"
 EOF
