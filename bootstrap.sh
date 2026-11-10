@@ -122,6 +122,46 @@ INPUTS
   ui_panel_step "Identidad Git (SSH)" --optional --estimate 30 <<'EOF'
 bash "$REPO_DIR/scripts/setup-git-identity.sh"
 EOF
+
+  ui_panel_inputs <<'INPUTS'
+confirm mostrar Mostrar claves publicas completas? n
+confirm probar Probar conexion SSH ahora? y
+INPUTS
+  ui_panel_step "Probar llaves SSH" --optional --estimate 30 <<'EOF'
+if [ -z "${NUI_STEP_RESULT:-}" ] || [ ! -f "$NUI_STEP_RESULT" ]; then
+  echo "##log Sin respuestas (modo no interactivo); prueba omitida"
+  exit 0
+fi
+. "$NUI_STEP_RESULT"
+
+if [ "${mostrar:-false}" = "true" ]; then
+  echo "##log Clave publica personal:"
+  while IFS= read -r l; do echo "##log $l"; done < "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null || true
+fi
+
+if [ "${probar:-true}" != "true" ]; then
+  echo "##log Prueba SSH omitida por el usuario"
+  exit 0
+fi
+
+ssh_test() {
+  local title="$1" target="$2" out
+  # StrictHostKeyChecking=accept-new cubre known_hosts sin depender de ui.sh.
+  if out="$(ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 "$target" 2>&1 || true)"; then
+    if printf '%s\n' "$out" | grep -Eiq 'successfully authenticated|logged in as'; then
+      echo "##log $title OK"
+      return 0
+    fi
+  fi
+  echo "##log $title falla (revisa que la clave este agregada)"
+  return 1
+}
+ssh_test "SSH GitHub" git@github.com || true
+if [ -f "$HOME/.ssh/id_ed25519_nuxiba.pub" ]; then
+  ssh_test "SSH Bitbucket" git@bitbucket-nuxiba || true
+fi
+echo "##log Prueba SSH finalizada"
+EOF
 else
   ui_panel_note "Identidad Git omitida (--skip-git)"
 fi

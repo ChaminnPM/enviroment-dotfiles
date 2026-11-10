@@ -166,9 +166,17 @@ ssh_check() {
   say "$title falla (revisa que la clave este agregada)."
   return 1
 }
-ssh_check "SSH GitHub" git@github.com || true
-if [ "$NUXIBA_ENABLED" = "1" ]; then
-  ssh_check "SSH Bitbucket" git@bitbucket-nuxiba || true
+if [ "$PANEL_MODE" = "1" ]; then
+  say "Claves listas; el paso siguiente te permitira probar la conexion."
+else
+  if ui_interactive && ui_ask "¿Probar la conexion SSH ahora?"; then
+    ssh_check "SSH GitHub" git@github.com || true
+    if [ "$NUXIBA_ENABLED" = "1" ]; then
+      ssh_check "SSH Bitbucket" git@bitbucket-nuxiba || true
+    fi
+  else
+    say "Prueba SSH omitida (pruébala despues con: ssh -T git@github.com)."
+  fi
 fi
 
 say "Configuracion de identidad completada."
