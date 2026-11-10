@@ -123,8 +123,8 @@ INPUTS
 bash "$REPO_DIR/scripts/setup-git-identity.sh"
 EOF
 
-  ui_panel_inputs <<'INPUTS'
-confirm mostrar Mostrar claves publicas completas? n
+  ui_panel_inputs <<INPUTS
+key pub_key $HOME/.ssh/id_ed25519_personal.pub Clave publica personal (copiala y pulsa enter):
 confirm probar Probar conexion SSH ahora? y
 INPUTS
   ui_panel_step "Probar llaves SSH" --optional --estimate 30 <<'EOF'
@@ -134,20 +134,16 @@ if [ -z "${NUI_STEP_RESULT:-}" ] || [ ! -f "$NUI_STEP_RESULT" ]; then
 fi
 . "$NUI_STEP_RESULT"
 
+if [ "${probar:-true}" != "true" ]; then
+  echo "##log Prueba SSH omitida por el usuario"
+  exit 0
+fi
+
 show_key() {
   local file="${1:-$HOME/.ssh/id_ed25519_personal.pub}"
   echo "##log Clave publica:"
   while IFS= read -r l; do echo "##log $l"; done < "$file" 2>/dev/null || true
 }
-
-if [ "${mostrar:-false}" = "true" ]; then
-  show_key
-fi
-
-if [ "${probar:-true}" != "true" ]; then
-  echo "##log Prueba SSH omitida por el usuario"
-  exit 0
-fi
 
 ssh_test() {
   local title="$1" target="$2" out
@@ -162,11 +158,11 @@ ssh_test() {
   return 1
 }
 if ! ssh_test "SSH GitHub" git@github.com; then
-  [ "${mostrar:-false}" = "true" ] || show_key "$HOME/.ssh/id_ed25519_personal.pub"
+  show_key "$HOME/.ssh/id_ed25519_personal.pub"
 fi
 if [ -f "$HOME/.ssh/id_ed25519_nuxiba.pub" ]; then
   if ! ssh_test "SSH Bitbucket" git@bitbucket-nuxiba; then
-    [ "${mostrar:-false}" = "true" ] || show_key "$HOME/.ssh/id_ed25519_nuxiba.pub"
+    show_key "$HOME/.ssh/id_ed25519_nuxiba.pub"
   fi
 fi
 echo "##log Prueba SSH finalizada"

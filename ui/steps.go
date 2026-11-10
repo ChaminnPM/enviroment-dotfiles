@@ -45,12 +45,13 @@ type planStep struct {
 // planInput es un campo del formulario que el panel pide antes de ejecutar
 // el paso. Los valores se guardan en $NUI_STATE_DIR/result-<N>.env.
 type planInput struct {
-	Type    string   `json:"type"` // input | password | confirm | select
+	Type    string   `json:"type"` // input | password | confirm | select | key
 	Name    string   `json:"name"`
 	Prompt  string   `json:"prompt"`
 	Default string   `json:"default"`
 	Options []string `json:"options"`
 	Multi   bool     `json:"multi"`
+	Path    string   `json:"path,omitempty"` // para type=key
 }
 
 type plan struct {
@@ -95,6 +96,10 @@ func loadPlan(path string) (plan, error) {
 			case "select":
 				if strings.TrimSpace(in.Name) == "" || len(in.Options) == 0 {
 					return plan{}, fmt.Errorf("paso %d: select inválido", i+1)
+				}
+			case "key":
+				if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.Path) == "" {
+					return plan{}, fmt.Errorf("paso %d: key inválida", i+1)
 				}
 			default:
 				return plan{}, fmt.Errorf("paso %d: tipo de input desconocido: %s", i+1, in.Type)
@@ -522,6 +527,11 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.formVals[in.Name] = strings.Join(vals, "\n")
+			return m.advanceForm(idx)
+		}
+
+	case "key":
+		if msg.String() == "enter" {
 			return m.advanceForm(idx)
 		}
 	}
@@ -1114,6 +1124,30 @@ func (m stepsModel) viewForm(w, h int) string {
 			if active {
 				lines = append(lines, "")
 			}
+
+		case "key":
+			path := os.ExpandEnv(in.Path)
+			if strings.HasPrefix(path, "~/") {
+				if home, err := os.UserHomeDir(); err == nil {
+					path = filepath.Join(home, path[2:])
+				}
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				lines = append(lines, prefix+"  "+stFaint.Render(truncate("(no se pudo leer "+in.Path+")", maxInt(0, innerW-4))))
+			} else {
+				text := strings.TrimRight(string(data), "\n")
+				ww := maxInt(8, innerW-4)
+				for _, kl := range strings.Split(text, "\n") {
+					for _, piece := range wrapLine(kl, ww) {
+						lines = append(lines, prefix+"  "+stLogLine.Render(piece))
+					}
+				}
+			}
+			if active {
+				lines = append(lines, "", stFaint.Render(truncate("archivo: "+in.Path, innerW)),
+					stFaint.Render(truncate("pulsa enter para continuar", innerW)))
+			}
 		}
 	}
 
@@ -1454,9 +1488,10 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 	clearScreen()
 	fmt.Println(bannerBox(termWidth(), 0, []string{p.Title}))
 
+	inputReader := bufio.NewReader(os.Stdin)
 	for i, ps := range p.Steps {
 		fmt.Printf("\n\033[1m== [%d/%d] %s ==\033[0m\n", i+1, len(p.Steps), ps.Title)
-		promptInputs(stateDir, i, ps.Inputs)
+		promptInputs(stateDir, i, ps.Inputs, inputReader)
 
 		c := exec.Command("bash", "-c", ps.Cmd)
 		env := append(os.Environ(), "TERM=dumb")
@@ -1466,11 +1501,11 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 		}
 		c.Env = env
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		c.Stdin = os.Stdin
 
 		warned := false
 		var err error
 		if ps.Interactive {
+			c.Stdin = os.Stdin
 			c.Stdout, c.Stderr = os.Stdout, os.Stderr
 			err = c.Run()
 		} else {
@@ -1539,7 +1574,7 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 }
 
 // promptInputs pide los campos del paso por stdin y escribe result-<N>.env.
-func promptInputs(stateDir string, idx int, inputs []planInput) {
+func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader) {
 	if len(inputs) == 0 || stateDir == "" {
 		return
 	}
@@ -1561,7 +1596,7 @@ func promptInputs(stateDir string, idx int, inputs []planInput) {
 					val = string(pw)
 				}
 			} else {
-				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				line, _ := rd.ReadString('\n')
 				val = strings.TrimRight(line, "\r\n")
 			}
 			if val == "" {
@@ -1569,7 +1604,7 @@ func promptInputs(stateDir string, idx int, inputs []planInput) {
 			}
 		case "confirm":
 			fmt.Printf("\n%s [s/n] (%s): ", in.Prompt, defaultYesNo(in.Default))
-			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			line, _ := rd.ReadString('\n')
 			line = strings.ToLower(strings.TrimSpace(line))
 			if line == "" {
 				line = defaultYesNo(in.Default)
@@ -1578,13 +1613,28 @@ func promptInputs(stateDir string, idx int, inputs []planInput) {
 			if line == "s" || line == "si" || line == "sí" || line == "y" || line == "yes" || line == "true" {
 				val = "true"
 			}
+		case "key":
+			fmt.Printf("\n%s\n", in.Prompt)
+			path := os.ExpandEnv(in.Path)
+			if strings.HasPrefix(path, "~/") {
+				if home, err := os.UserHomeDir(); err == nil {
+					path = filepath.Join(home, path[2:])
+				}
+			}
+			if data, err := os.ReadFile(path); err == nil {
+				fmt.Print(string(data))
+			} else {
+				fmt.Printf("(no se pudo leer %s)\n", in.Path)
+			}
+			fmt.Print("Pulsa enter para continuar... ")
+			_, _ = rd.ReadString('\n')
 		case "select":
 			fmt.Printf("\n%s\n", in.Prompt)
 			for oi, opt := range in.Options {
 				fmt.Printf("  %2d) %s\n", oi+1, opt)
 			}
 			fmt.Print("Selección (números separados por espacio): ")
-			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			line, _ := rd.ReadString('\n')
 			var picked []string
 			for _, f := range strings.Fields(line) {
 				n, err := strconv.Atoi(f)
@@ -1728,6 +1778,44 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func wrapLine(s string, w int) []string {
+	if w < 1 {
+		return []string{s}
+	}
+	var out []string
+	line := ""
+	flush := func() {
+		if line != "" {
+			out = append(out, line)
+			line = ""
+		}
+	}
+	for _, word := range strings.Fields(s) {
+		r := []rune(word)
+		for len(r) > w {
+			flush()
+			out = append(out, string(r[:w]))
+			r = r[w:]
+		}
+		word = string(r)
+		if line == "" {
+			line = word
+			continue
+		}
+		if len([]rune(line))+1+len([]rune(word)) <= w {
+			line += " " + word
+		} else {
+			flush()
+			line = word
+		}
+	}
+	flush()
+	if len(out) == 0 {
+		out = append(out, "")
+	}
+	return out
 }
 
 func truncate(s string, w int) string {

@@ -57,7 +57,7 @@ run_cmd() {
   # run_cmd <comando>: en panel emite ##log y guarda el log; standalone directo.
   if [ "$PANEL_MODE" = "1" ]; then
     local log="$LOG_DIR/identity-$(date +%Y%m%d-%H%M%S)-$$.log"
-    if bash -c "$1" >"$log" 2>&1; then return 0; fi
+    if bash -c "$1" >"$log" 2>&1 </dev/null; then return 0; fi
     tail -n 5 "$log" 2>/dev/null | while IFS= read -r l; do say "$l"; done
     return 1
   fi

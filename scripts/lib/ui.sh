@@ -494,6 +494,21 @@ _ui_panel_inputs_fields() {
         multis+=("0")
         options+=("")
         ;;
+      key)
+        # key <nombre> <ruta> <prompt...>: muestra el archivo en el panel.
+        name="${rest%% *}"
+        after="${rest#"$name"}"
+        after="${after#"${after%%[![:space:]]*}"}"
+        path="${after%% *}"
+        prompt="${after#"$path"}"
+        prompt="${prompt#"${prompt%%[![:space:]]*}"}"
+        names+=("$name")
+        types+=("key")
+        prompts+=("$prompt")
+        defaults+=("")
+        multis+=("0")
+        options+=("$path")
+        ;;
       option)
         name="${rest%% *}"
         value="${rest#"$name"}"
@@ -638,6 +653,11 @@ _ui_panel_prompt_inputs() {
           esac
         fi
         ;;
+      key)
+        printf '\n%s\n' "$prompt"
+        cat "$options" 2>/dev/null || printf '(no se pudo leer %s)\n' "$options"
+        read -rp "Pulsa enter para continuar... " || true
+        ;;
       select)
         printf '\n%s\n' "$prompt"
         opts=()
@@ -761,6 +781,9 @@ _ui_panel_plan_json() {
           ifirst=0
           printf '{"type":"%s","name":"%s","prompt":"%s","default":"%s"' \
             "$ty" "$(json_escape "$na")" "$(json_escape "$pr")" "$(json_escape "$de")"
+          if [ "$ty" = "key" ]; then
+            printf ',"path":"%s"' "$(json_escape "$op")"
+          fi
           if [ "$ty" = "select" ]; then
             printf ',"multi":%s,"options":[' "$([ "$mu" = "1" ] && echo true || echo false)"
             opts=()
