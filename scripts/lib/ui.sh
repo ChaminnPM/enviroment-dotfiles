@@ -413,20 +413,47 @@ ui_report() {
 #   ui_panel_step "Dependencias base" --estimate 60 <<'EOF'
 #   ...comandos...
 #   EOF
-#   ui_panel_step "Identidad Git" --interactive <<'EOF'
+#   ui_panel_step "Identidad Git" --optional --estimate 20 <<'EOF'
 #   bash "$REPO_DIR/scripts/setup-git-identity.sh"
 #   EOF
 #   ui_panel_run
+#
+# Formularios (se resuelven dentro del panel):
+#   ui_panel_inputs <<'INPUTS'
+#   input nombre Prompt:
+#   password token Prompt:
+#   confirm clonar ¿Clonar? n
+#   select extras Paquetes many
+#   option extras lazyvim
+#   default extras lazyvim
+#   INPUTS
+#   ui_panel_step "Paso con formulario" --optional <<'EOF'
+#   . "$NUI_STEP_RESULT"
+#   ...
+#   EOF
 #
 # Cada cuerpo se ejecuta con bash (set -euo pipefail) y puede emitir:
 #   ##progress N   porcentaje del paso
 #   ##log T        linea limpia en el panel
 #   ##title T      renombra el paso en vivo
 #   ##warn T       marca aviso y continua
-# ui_panel_run devuelve 1 si hubo errores (y ya imprime el reporte final).
+# ui_panel_run devuelve 1 si hubo errores (y el panel muestra el reporte).
+# Todo el armado del plan es bash puro (no requiere python3).
 PANEL_DIR=""
 PANEL_STEPS=()
 PANEL_NOTES=()
+PANEL_INPUTS=""
+PANEL_STATE_DIR=""
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\n'/\\n}"
+  printf '%s' "$s"
+}
 
 ui_panel_begin() {
   ensure_log_dir
@@ -434,63 +461,91 @@ ui_panel_begin() {
   PANEL_STEPS=()
   PANEL_NOTES=()
   PANEL_INPUTS=""
+  PANEL_STATE_DIR=""
 }
 
 ui_panel_note() { PANEL_NOTES+=("$*"); }
 
-# ui_panel_inputs: declara el formulario del SIGUIENTE ui_panel_step.
-# DSL (una directiva por linea, se lee de stdin):
-#   input <nombre> <prompt...>          texto
-#   password <nombre> <prompt...>       texto oculto
-#   confirm <nombre> <prompt...> [s|n]  booleano
-#   select <nombre> <prompt...> [many]  lista (many = multi-seleccion)
-#   option <nombre> <valor>             opcion del select
-#   default <nombre> <valor>            valor por defecto
 ui_panel_inputs() { PANEL_INPUTS="$(cat)"; }
 
-_ui_panel_inputs_json() {
-  python3 -c '
-import json, sys
+# Convierte el DSL de inputs a lineas de campos (tab separado, opciones con
+# \x1f): type, nombre, prompt, default, multi, opciones.
+_ui_panel_inputs_fields() {
+  local line kind rest name prompt value last
+  local -a names=() types=() prompts=() defaults=() multis=() options=()
+  local i
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac
+    kind="${line%% *}"
+    rest="${line#"$kind"}"
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+    case "$kind" in
+      input|password|confirm|select)
+        name="${rest%% *}"
+        prompt="${rest#"$name"}"
+        prompt="${prompt#"${prompt%%[![:space:]]*}"}"
+        names+=("$name")
+        types+=("$kind")
+        prompts+=("$prompt")
+        defaults+=("")
+        multis+=("0")
+        options+=("")
+        ;;
+      option)
+        name="${rest%% *}"
+        value="${rest#"$name"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        for i in "${!names[@]}"; do
+          if [ "${names[$i]}" = "$name" ]; then
+            if [ -n "${options[$i]}" ]; then
+              options[$i]="${options[$i]}"$'\x1e'"$value"
+            else
+              options[$i]="$value"
+            fi
+          fi
+        done
+        ;;
+      default)
+        name="${rest%% *}"
+        value="${rest#"$name"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        for i in "${!names[@]}"; do
+          if [ "${names[$i]}" = "$name" ]; then
+            defaults[$i]="$value"
+          fi
+        done
+        ;;
+    esac
+  done
 
-inputs = []
-cur = None
-for raw in sys.stdin.read().splitlines():
-    line = raw.strip()
-    if not line or line.startswith("#"):
-        continue
-    kind = line.split(None, 1)[0]
-    rest = line[len(kind):].strip()
-    if kind in ("input", "password", "confirm", "select"):
-        parts = rest.split(None, 1)
-        name = parts[0] if parts else ""
-        prompt = parts[1] if len(parts) > 1 else ""
-        item = {"type": kind, "name": name, "prompt": prompt}
-        if kind == "confirm":
-            toks = prompt.split()
-            if toks and toks[-1].lower() in ("s", "n", "si", "no", "y", "true", "false"):
-                item["default"] = "true" if toks[-1].lower() in ("s", "si", "y", "true") else "false"
-                prompt = " ".join(toks[:-1])
-                item["prompt"] = prompt
-        if kind == "select":
-            toks = prompt.split()
-            multi = bool(toks and toks[-1].lower() == "many")
-            if multi:
-                prompt = " ".join(toks[:-1])
-            item["multi"] = multi
-            item["prompt"] = prompt
-            item["options"] = []
-        inputs.append(item)
-        cur = item
-    elif kind == "option" and cur is not None:
-        opt = rest.split(None, 1)
-        if len(opt) > 1:
-            cur.setdefault("options", []).append(opt[1])
-    elif kind == "default" and cur is not None:
-        dflt = rest.split(None, 1)
-        if len(dflt) > 1:
-            cur["default"] = dflt[1]
-print(json.dumps(inputs, ensure_ascii=False))
-'
+  for i in "${!names[@]}"; do
+    case "${types[$i]}" in
+      confirm)
+        last="${prompts[$i]##* }"
+        case "$last" in
+          s|S|si|no|n|y|true|false)
+            case "$last" in
+              s|S|si|y|true) defaults[$i]="true" ;;
+              *) defaults[$i]="false" ;;
+            esac
+            prompts[$i]="${prompts[$i]% *}"
+            ;;
+        esac
+        ;;
+      select)
+        last="${prompts[$i]##* }"
+        if [ "$last" = "many" ]; then
+          multis[$i]="1"
+          prompts[$i]="${prompts[$i]% *}"
+        fi
+        ;;
+    esac
+    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' \
+      "${types[$i]}" "${names[$i]}" "${prompts[$i]}" "${defaults[$i]}" "${multis[$i]}" "${options[$i]}"
+  done
 }
 
 ui_panel_step() {
@@ -518,11 +573,12 @@ ui_panel_step() {
   local b64 b64inputs=""
   b64="$(printf '%s' "$title" | base64 | tr -d '\n')"
   if [ -n "$PANEL_INPUTS" ]; then
-    b64inputs="$(printf '%s' "$PANEL_INPUTS" | _ui_panel_inputs_json | base64 | tr -d '\n')" || {
+    b64inputs="$(printf '%s\n' "$PANEL_INPUTS" | _ui_panel_inputs_fields | base64 | tr -d '\n')"
+    if [ -z "$b64inputs" ]; then
       ui_error "ui_panel_inputs: DSL invalido"
       PANEL_INPUTS=""
       return 1
-    }
+    fi
   fi
   PANEL_INPUTS=""
   PANEL_STEPS+=("$b64|$optional|$interactive|$estimate|$file|$b64inputs")
@@ -546,33 +602,21 @@ _ui_panel_filter() {
   done
 }
 
-# Ejecuta el plan sin panel (nui ausente, VERBOSE o terminal no interactiva).
 # Pide los inputs de un paso por stdin (fallback sin panel).
 _ui_panel_prompt_inputs() {
   local state="$1" idx="$2" b64="$3"
   [ -n "$b64" ] || return 0
   local out="$state/result-$(printf '%02d' "$idx").env"
   : > "$out"
-  local type name prompt default multi options val sel n i idxopt yesno
   local fields
   fields="$(mktemp "${TMPDIR:-/tmp}/nui-inputs.XXXXXX")"
-  printf '%s' "$b64" | base64 -d | python3 -c '
-import json, sys
-for f in json.load(sys.stdin):
-    d = f.get("default")
-    if d is True: d = "true"
-    elif d is False: d = "false"
-    else: d = str(d)
-    print("\t".join([
-        f.get("type", ""), f.get("name", ""), f.get("prompt", ""), d,
-        "1" if f.get("multi") else "0",
-        "\x1f".join(f.get("options", [])),
-    ]))
-' > "$fields"
+  printf '%s' "$b64" | base64 -d > "$fields"
   local -a field_lines=()
   mapfile -t field_lines < "$fields"
+  local line type name prompt default multi options val sel n i idxopt yesno
+  local -a opts=()
   for line in "${field_lines[@]}"; do
-    IFS=$'\t' read -r type name prompt default multi options <<< "$line"
+    IFS=$'\x1f' read -r type name prompt default multi options <<< "$line"
     [ -n "$type" ] || continue
     val="$default"
     case "$type" in
@@ -596,8 +640,8 @@ for f in json.load(sys.stdin):
         ;;
       select)
         printf '\n%s\n' "$prompt"
-        local -a opts=()
-        IFS=$'\x1f' read -ra opts <<< "$options"
+        opts=()
+        IFS=$'\x1e' read -ra opts <<< "$options"
         for i in "${!opts[@]}"; do printf '  %2d) %s\n' "$((i + 1))" "${opts[$i]}"; done
         read -rp "Seleccion (numeros separados por espacio): " sel || true
         val=""
@@ -616,10 +660,12 @@ ${opts[$idxopt]}"; else val="${opts[$idxopt]}"; fi
   rm -f "$fields"
 }
 
+# Ejecuta el plan sin panel (nui ausente, VERBOSE o terminal no interactiva).
 _ui_panel_run_plain() {
   local manifest="$1" title="$2"
   local total=${#PANEL_STEPS[@]} i=0
   local b64t opt intr est path b64inputs t log rc
+  local result entry
 
   REPORT_OK=(); REPORT_WARN=(); REPORT_ERR=()
   ui_clear
@@ -637,7 +683,7 @@ _ui_panel_run_plain() {
     rm -f "$log.warn"
 
     printf '\n\033[1m== [%d/%d] %s ==\033[0m\n' "$i" "$total" "$t"
-    local result="${NUI_STATE_DIR:-$PANEL_DIR}/result-$(printf '%02d' "$i").env"
+    result="${NUI_STATE_DIR:-$PANEL_DIR}/result-$(printf '%02d' "$i").env"
     _ui_panel_prompt_inputs "${NUI_STATE_DIR:-$PANEL_DIR}" "$i" "$b64inputs"
     export NUI_STEP_RESULT="$result"
 
@@ -673,6 +719,73 @@ _ui_panel_run_plain() {
   ui_report
 }
 
+# Arma el plan JSON en bash puro (sin python3).
+_ui_panel_plan_json() {
+  local manifest="$1" out="$2" title="$3"
+  local first_step=1
+  local entry b64t opt intr est path b64in t
+  local nfirst=1 n
+  local fields line ty na pr de mu op o optval
+  local ifirst ofirst
+  local -a opts=()
+
+  {
+    printf '{"title":"%s","notes":[' "$(json_escape "$title")"
+    for n in ${PANEL_NOTES[@]+"${PANEL_NOTES[@]}"}; do
+      [ "$nfirst" = "0" ] && printf ','
+      nfirst=0
+      printf '"%s"' "$(json_escape "$n")"
+    done
+    printf '],"steps":['
+
+    while IFS='|' read -r b64t opt intr est path b64in; do
+      [ -n "$path" ] || continue
+      t="$(printf '%s' "$b64t" | base64 -d)"
+      [ "$first_step" = "0" ] && printf ','
+      first_step=0
+      printf '{"title":"%s","cmd":"bash %s","optional":%s,"interactive":%s,"estimate":%s' \
+        "$(json_escape "$t")" \
+        "$(json_escape "$(printf '%q' "$path")")" \
+        "$([ "$opt" = "1" ] && echo true || echo false)" \
+        "$([ "$intr" = "1" ] && echo true || echo false)" \
+        "$est"
+
+      if [ -n "$b64in" ]; then
+        printf ',"inputs":['
+        fields="$(mktemp "${TMPDIR:-/tmp}/nui-fields.XXXXXX")"
+        printf '%s' "$b64in" | base64 -d > "$fields"
+        ifirst=1
+        while IFS=$'\x1f' read -r ty na pr de mu op; do
+          [ -n "$ty" ] || continue
+          [ "$ifirst" = "0" ] && printf ','
+          ifirst=0
+          printf '{"type":"%s","name":"%s","prompt":"%s","default":"%s"' \
+            "$ty" "$(json_escape "$na")" "$(json_escape "$pr")" "$(json_escape "$de")"
+          if [ "$ty" = "select" ]; then
+            printf ',"multi":%s,"options":[' "$([ "$mu" = "1" ] && echo true || echo false)"
+            opts=()
+            IFS=$'\x1e' read -ra opts <<< "$op"
+            ofirst=1
+            for optval in "${opts[@]}"; do
+              [ -z "$optval" ] && continue
+              [ "$ofirst" = "0" ] && printf ','
+              ofirst=0
+              printf '"%s"' "$(json_escape "$optval")"
+            done
+            printf ']'
+          fi
+          printf '}'
+        done < "$fields"
+        rm -f "$fields"
+        printf ']'
+      fi
+      printf '}'
+    done < "$manifest"
+
+    printf ']}\n'
+  } > "$out"
+}
+
 # ui_panel_run [--title T] [--plain]: ejecuta el plan y muestra el reporte.
 ui_panel_run() {
   local title="${UI_APP_TITLE:-INSTALACIÓN}" plain=0
@@ -698,46 +811,8 @@ ui_panel_run() {
   PANEL_STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nui-steps-state.XXXXXX")"
   export NUI_STATE_DIR="$PANEL_STATE_DIR"
 
-  if ! PANEL_TITLE="$title" python3 - "$manifest" "$notes" "$plan" <<'PY'
-import base64, json, os, shlex, sys
-
-manifest, notes_path, out = sys.argv[1:4]
-steps = []
-with open(manifest, encoding="utf-8") as fh:
-    for line in fh:
-        line = line.rstrip("\n")
-        if not line:
-            continue
-        parts = line.split("|")
-        while len(parts) < 6:
-            parts.append("")
-        b64title, optional, interactive, estimate, path, b64inputs = parts[:6]
-        step = {
-            "title": base64.b64decode(b64title).decode("utf-8"),
-            "cmd": "bash " + shlex.quote(path),
-            "optional": optional == "1",
-            "interactive": interactive == "1",
-            "estimate": int(estimate or 0),
-        }
-        if b64inputs:
-            step["inputs"] = json.loads(base64.b64decode(b64inputs).decode("utf-8"))
-        steps.append(step)
-
-notes = []
-try:
-    with open(notes_path, encoding="utf-8") as fh:
-        notes = [l.rstrip("\n") for l in fh if l.strip()]
-except FileNotFoundError:
-    pass
-
-with open(out, "w", encoding="utf-8") as fh:
-    json.dump({
-        "title": os.environ.get("PANEL_TITLE", "INSTALACIÓN"),
-        "notes": notes,
-        "steps": steps,
-    }, fh, ensure_ascii=False)
-PY
-  then
+  _ui_panel_plan_json "$manifest" "$plan" "$title"
+  if [ ! -s "$plan" ]; then
     ui_error "No se pudo generar el plan de pasos"
     return 1
   fi
@@ -745,7 +820,7 @@ PY
   if [ "${PLAN_ONLY:-0}" = "1" ]; then
     cat "$plan"
     if [ "${PLAN_KEEP:-0}" != "1" ]; then
-      rm -rf "$PANEL_DIR"
+      rm -rf "$PANEL_DIR" "$PANEL_STATE_DIR"
       PANEL_DIR=""
       PANEL_STEPS=()
       PANEL_NOTES=()
