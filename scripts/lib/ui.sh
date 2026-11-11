@@ -373,6 +373,46 @@ ui_ssh_test() {
   ui_logged "$title" "out=\$(ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 '$target' 2>&1 || true); printf '%s\n' \"\$out\"; printf '%s\n' \"\$out\" | grep -Eiq 'successfully authenticated|authenticated via ssh key|logged in as'"
 }
 
+# --- portapapeles y URLs sin dependencias de Windows ----------------------
+ui_copy_clip() { # stdin -> portapapeles; 0 si se copio
+  local data
+  data="$(cat 2>/dev/null)" || return 1
+  [ -n "$data" ] || return 1
+  if command -v wl-copy >/dev/null 2>&1 && printf '%s\n' "$data" | wl-copy >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v xclip >/dev/null 2>&1 && printf '%s\n' "$data" | xclip -selection clipboard -in >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v xsel >/dev/null 2>&1 && printf '%s\n' "$data" | xsel --clipboard --input >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v pbcopy >/dev/null 2>&1 && printf '%s\n' "$data" | pbcopy >/dev/null 2>&1; then
+    return 0
+  fi
+  # OSC 52: el propio terminal copia (Windows Terminal, kitty, alacritty...).
+  # Se escribe a /dev/tty porque el stdout del paso lo consume el panel.
+  if [ -c /dev/tty ] && : 2>/dev/null < /dev/tty; then
+    printf '\033]52;c;%s\a' "$(printf '%s\n' "$data" | base64 -w0 2>/dev/null)" 2>/dev/null > /dev/tty && return 0
+  fi
+  return 1
+}
+
+ui_open_url() { # abre una URL con herramientas Linux; 0 si hay herramienta
+  local url="$1"
+  if command -v xdg-open >/dev/null 2>&1; then
+    ( xdg-open "$url" >/dev/null 2>&1 & ) 2>/dev/null
+    return 0
+  fi
+  if command -v gio >/dev/null 2>&1 && gio open "$url" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v wslview >/dev/null 2>&1 && wslview "$url" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 # --- reporte final -------------------------------------------------------
 ui_report() {
   ensure_log_dir
