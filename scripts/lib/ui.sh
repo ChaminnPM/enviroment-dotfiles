@@ -354,7 +354,7 @@ ui_seed_known_hosts() {
   chmod 700 "$HOME/.ssh" 2>/dev/null || true
   touch "$HOME/.ssh/known_hosts" 2>/dev/null || true
   tmp_known="$(mktemp)"
-  for host in github.com bitbucket.org; do
+  for host in github.com bitbucket.org ssh.bitbucket.org; do
     ssh-keyscan -t ed25519,rsa "$host" >> "$tmp_known" 2>/dev/null || true
   done
   if [ -s "$tmp_known" ]; then
