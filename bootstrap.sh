@@ -242,7 +242,7 @@ for p in ${SELECTED}; do
     lazyvim) ;;
     fd-find) command -v fd >/dev/null 2>&1 || CUSTOM_APT+=(fd-find) ;;
     lazygit) command -v lazygit >/dev/null 2>&1 || CUSTOM_APT+=(lazygit) ;;
-    neovim) command -v nvim >/dev/null 2>&1 || CUSTOM_APT+=(neovim) ;;
+    neovim) ;; # se maneja con ensure_nvim (requiere > 0.11.2)
     *) command -v "$p" >/dev/null 2>&1 || CUSTOM_APT+=("$p") ;;
   esac
 done
@@ -267,14 +267,100 @@ if [ ${#CUSTOM_APT[@]} -gt 0 ]; then
   fi
 fi
 
-if printf '%s\n' ${SELECTED} | grep -qx 'lazyvim'; then
-  if ! command -v nvim >/dev/null 2>&1; then
-    if [ -n "${APT_PREFIX:-}" ] && ! sudo -n true 2>/dev/null; then
-      echo "##warn Sin sudo activo; no puedo instalar neovim"
-    elif ! apt_one neovim; then
-      echo "##warn No se pudo instalar neovim"
+# --- neovim: requiere version > 0.11.2 -----------------------------------
+# apt de Debian trae versiones menores (0.10.x en trixie), asi que se
+# instala desde los releases de GitHub en ~/.local/nvim (sin sudo).
+nvim_ver() {
+  "$1" --version 2>/dev/null | sed -n 's/^NVIM v\([0-9][0-9.]*\).*/\1/p' | head -1
+}
+
+ver_gt() { # ver_gt A B -> 0 si A > B (semver de 3 componentes)
+  local -a A B
+  local i x y
+  IFS='.' read -r -a A <<< "${1:-0}"
+  IFS='.' read -r -a B <<< "${2:-0}"
+  for i in 0 1 2; do
+    x="${A[i]:-0}"; y="${B[i]:-0}"
+    x="${x%%[^0-9]*}"; y="${y%%[^0-9]*}"
+    x=$((10#${x:-0})); y=$((10#${y:-0}))
+    if [ "$x" -gt "$y" ]; then return 0; fi
+    if [ "$x" -lt "$y" ]; then return 1; fi
+  done
+  return 1
+}
+
+ensure_nvim() {
+  local bin cur arch asset tmp dir
+  bin="$(command -v nvim 2>/dev/null || true)"
+  if [ -n "$bin" ]; then
+    cur="$(nvim_ver "$bin")"
+    if ver_gt "$cur" 0.11.2; then
+      echo "##log neovim OK ($cur > 0.11.2, $bin)"
+      return 0
     fi
+    echo "##log neovim actual: ${cur:-desconocida} ($bin); requiere > 0.11.2"
+  else
+    echo "##log neovim no esta instalado; se instalara desde GitHub"
   fi
+
+  case "$(uname -m)" in
+    x86_64) arch="x86_64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) echo "##warn Arquitectura no soportada para neovim: $(uname -m)"; return 1 ;;
+  esac
+  tmp="$(mktemp -d)"
+  dir=""
+  for asset in "nvim-linux-${arch}" "nvim-linux64"; do
+    echo "##log Descargando neovim (latest, ${asset})..."
+    if curl -fsSL "https://github.com/neovim/neovim/releases/latest/download/${asset}.tar.gz" -o "$tmp/nvim.tgz"; then
+      dir="$asset"
+      break
+    fi
+  done
+  if [ -z "$dir" ]; then
+    echo "##warn No se pudo descargar neovim desde GitHub"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if ! tar -xzf "$tmp/nvim.tgz" -C "$tmp"; then
+    echo "##warn El tarball de neovim esta corrupto"
+    rm -rf "$tmp"
+    return 1
+  fi
+  mkdir -p "$HOME/.local"
+  rm -rf "$HOME/.local/nvim"
+  if ! mv "$tmp/$dir" "$HOME/.local/nvim"; then
+    echo "##warn No se pudo instalar neovim en ~/.local/nvim"
+    rm -rf "$tmp"
+    return 1
+  fi
+  rm -rf "$tmp"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$HOME/.local/nvim/bin/nvim" "$HOME/.local/bin/nvim"
+  hash -r
+
+  bin="$HOME/.local/bin/nvim"
+  cur="$(nvim_ver "$bin")"
+  if ver_gt "$cur" 0.11.2; then
+    echo "##log neovim instalado: $cur ($bin)"
+    return 0
+  fi
+  echo "##warn neovim instalado pero no reporta version > 0.11.2 (${cur:-desconocida})"
+  return 1
+}
+
+need_nvim=0
+printf '%s\n' ${SELECTED} | grep -qx 'neovim' && need_nvim=1
+if printf '%s\n' ${SELECTED} | grep -qx 'lazyvim'; then
+  need_nvim=1
+fi
+if [ "$need_nvim" = "1" ]; then
+  if ! ensure_nvim; then
+    echo "##warn neovim quedo sin la version requerida (> 0.11.2)"
+  fi
+fi
+
+if printf '%s\n' ${SELECTED} | grep -qx 'lazyvim'; then
   if [ ! -d "$HOME/.config/nvim" ]; then
     echo "##log Clonando LazyVim starter"
     if git clone https://github.com/LazyVim/starter "$HOME/.config/nvim" >/dev/null 2>&1; then
