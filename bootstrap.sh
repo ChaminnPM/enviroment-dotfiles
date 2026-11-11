@@ -38,6 +38,9 @@ command -v gzip >/dev/null 2>&1 || APT_PKGS+=(gzip)
 command -v rsync >/dev/null 2>&1 || APT_PKGS+=(rsync)
 command -v numfmt >/dev/null 2>&1 || APT_PKGS+=(coreutils)
 command -v xdg-open >/dev/null 2>&1 || APT_PKGS+=(xdg-utils)
+# Portapapeles para el copiado de claves SSH (ui_copy_clip)
+command -v wl-copy >/dev/null 2>&1 || APT_PKGS+=(wl-clipboard)
+command -v xclip >/dev/null 2>&1 || APT_PKGS+=(xclip)
 command -v ssh-keygen >/dev/null 2>&1 || APT_PKGS+=(openssh-client)
 # bash no puede exportar arrays: convertir a escalar antes de exportar.
 APT_PKGS_STR="${APT_PKGS[*]}"
