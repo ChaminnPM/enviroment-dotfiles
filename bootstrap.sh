@@ -202,6 +202,7 @@ option extras eza
 option extras zoxide
 option extras fd-find
 option extras lazygit
+option extras neovim
 INPUTS
 ui_panel_step "Paquetes custom" --estimate 90 <<'EOF'
 if [ -z "${NUI_STEP_RESULT:-}" ] || [ ! -f "$NUI_STEP_RESULT" ]; then
@@ -241,6 +242,7 @@ for p in ${SELECTED}; do
     lazyvim) ;;
     fd-find) command -v fd >/dev/null 2>&1 || CUSTOM_APT+=(fd-find) ;;
     lazygit) command -v lazygit >/dev/null 2>&1 || CUSTOM_APT+=(lazygit) ;;
+    neovim) command -v nvim >/dev/null 2>&1 || CUSTOM_APT+=(neovim) ;;
     *) command -v "$p" >/dev/null 2>&1 || CUSTOM_APT+=("$p") ;;
   esac
 done
