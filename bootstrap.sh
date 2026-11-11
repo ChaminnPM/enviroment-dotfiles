@@ -73,17 +73,30 @@ fi
 EOF
 
 ui_panel_step "Dependencias base" --estimate 45 <<'EOF'
-apt_run() {
-  local log rc
-  log="$(mktemp)"
-  if [ -n "${APT_PREFIX:-}" ]; then
-    ${APT_PREFIX}apt-get "$@" >"$log" 2>&1
+sudo_ok=1
+if [ -n "${APT_PREFIX:-}" ]; then
+  if sudo -n true 2>/dev/null; then
+    sudo_ok=1
   else
-    apt-get "$@" >"$log" 2>&1
+    sudo_ok=0
+    echo "##warn Contraseña sudo no activa; apt no instalara nada"
+    echo "##log Completa el paso 'Credenciales sudo' (relanzando la instalación) para apt"
   fi
-  rc=$?
+fi
+
+apt_run() {
+  local log rc to
+  log="$(mktemp)"
+  to="${APT_TIMEOUT:-600}"
+  rc=0
+  export DEBIAN_FRONTEND=noninteractive
+  if [ -n "${APT_PREFIX:-}" ]; then
+    timeout "$to" sudo -n apt-get "$@" >"$log" 2>&1 || rc=$?
+  else
+    timeout "$to" apt-get "$@" >"$log" 2>&1 || rc=$?
+  fi
   if [ "$rc" -ne 0 ]; then
-    echo "##log Salida de apt (ultimas lineas):"
+    echo "##log apt termino con codigo $rc (ultimas lineas):"
     tail -n 5 "$log" 2>/dev/null | while IFS= read -r l; do echo "##log $l"; done
   fi
   rm -f "$log"
@@ -92,11 +105,15 @@ apt_run() {
 
 if [ -n "${APT_PKGS:-}" ]; then
   if command -v apt-get >/dev/null 2>&1; then
-    echo "##log Actualizando indices"
-    apt_run update || true
-    echo "##log Instalando: ${APT_PKGS}"
-    if ! apt_run install -y --no-install-recommends ${APT_PKGS}; then
-      echo "##warn No se pudieron instalar: ${APT_PKGS}"
+    if [ "$sudo_ok" = "0" ]; then
+      echo "##log Omito instalacion de: ${APT_PKGS} (sudo no activo)"
+    else
+      echo "##log Actualizando indices"
+      apt_run update || true
+      echo "##log Instalando: ${APT_PKGS}"
+      if ! apt_run install -y --no-install-recommends ${APT_PKGS}; then
+        echo "##warn No se pudieron instalar: ${APT_PKGS}"
+      fi
     fi
   else
     echo "##warn apt-get no disponible; instala: ${APT_PKGS}"
@@ -199,6 +216,25 @@ if [ -z "$SELECTED" ]; then
   exit 0
 fi
 
+apt_one() {
+  local pkg="$1" log rc to
+  log="$(mktemp)"
+  to="${APT_TIMEOUT:-600}"
+  rc=0
+  export DEBIAN_FRONTEND=noninteractive
+  if [ -n "${APT_PREFIX:-}" ]; then
+    timeout "$to" sudo -n apt-get install -y --no-install-recommends "$pkg" >"$log" 2>&1 || rc=$?
+  else
+    timeout "$to" apt-get install -y --no-install-recommends "$pkg" >"$log" 2>&1 || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "##log apt termino con codigo $rc para $pkg (ultimas lineas):"
+    tail -n 3 "$log" 2>/dev/null | while IFS= read -r l; do echo "##log $l"; done
+  fi
+  rm -f "$log"
+  return "$rc"
+}
+
 CUSTOM_APT=()
 for p in ${SELECTED}; do
   case "$p" in
@@ -210,27 +246,32 @@ for p in ${SELECTED}; do
 done
 
 if [ ${#CUSTOM_APT[@]} -gt 0 ]; then
-  if command -v apt-get >/dev/null 2>&1; then
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "##warn Instala manualmente: ${CUSTOM_APT[*]}"
+  elif [ -n "${APT_PREFIX:-}" ] && ! sudo -n true 2>/dev/null; then
+    echo "##warn Contraseña sudo no activa; no puedo instalar: ${CUSTOM_APT[*]}"
+    echo "##log Relanza la instalación y completa el paso 'Credenciales sudo'"
+  else
     total=${#CUSTOM_APT[@]}
     i=0
     for pkg in "${CUSTOM_APT[@]}"; do
       i=$((i + 1))
       echo "##log Instalando ($i/$total): $pkg"
-      if ! ${APT_PREFIX}apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+      if ! apt_one "$pkg"; then
         echo "##warn No se pudo instalar $pkg"
       fi
       echo "##progress $((i * 100 / total))"
     done
-  else
-    echo "##warn Instala manualmente: ${CUSTOM_APT[*]}"
   fi
 fi
 
 if printf '%s\n' ${SELECTED} | grep -qx 'lazyvim'; then
   if ! command -v nvim >/dev/null 2>&1; then
-    echo "##log Instalando neovim"
-    ${APT_PREFIX}apt-get install -y --no-install-recommends neovim >/dev/null 2>&1 \
-      || echo "##warn No se pudo instalar neovim"
+    if [ -n "${APT_PREFIX:-}" ] && ! sudo -n true 2>/dev/null; then
+      echo "##warn Sin sudo activo; no puedo instalar neovim"
+    elif ! apt_one neovim; then
+      echo "##warn No se pudo instalar neovim"
+    fi
   fi
   if [ ! -d "$HOME/.config/nvim" ]; then
     echo "##log Clonando LazyVim starter"

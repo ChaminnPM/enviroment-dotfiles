@@ -8,7 +8,7 @@ import (
 	"os"
 )
 
-var nuiVersion = "0.2.2"
+var nuiVersion = "0.2.3"
 
 func main() {
 	if len(os.Args) < 2 {

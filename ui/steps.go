@@ -863,13 +863,17 @@ func (m stepsModel) View() string {
 	if m.width == 0 || m.height == 0 {
 		return ""
 	}
+	// Margen defensivo: no escribir nunca en la ultima celda (esquina inferior
+	// derecha). Terminales con auto-wrap inmediato hacen scroll y corrompen el
+	// frame; con columna derecha y fila inferior vacias eso es imposible.
+	w, h := m.width-1, m.height-1
 	if m.showHelp {
-		return normalizeView(m.viewHelp(), m.width, m.height)
+		return normalizeView(m.viewHelp(), w, h)
 	}
 
-	bodyH := m.height - 2
-	leftW := clampInt(int(float64(m.width)*0.40), 28, 40)
-	rightW := m.width - leftW - 2
+	bodyH := h - 2
+	leftW := clampInt(int(float64(w)*0.40), 28, 40)
+	rightW := w - leftW - 2
 
 	var right string
 	switch {
@@ -888,11 +892,11 @@ func (m stepsModel) View() string {
 
 	out := lipgloss.JoinVertical(lipgloss.Left,
 		body,
-		stRule.Render(strings.Repeat("─", m.width)),
-		m.viewFooter(),
+		stRule.Render(strings.Repeat("─", w)),
+		m.viewFooter(w),
 	)
 	// Normaliza alto/ancho para que el renderer nunca superponga frames.
-	return normalizeView(out, m.width, m.height)
+	return normalizeView(out, w, h)
 }
 
 // normalizeView garantiza exactamente h lineas y ancho <= w por linea.
@@ -1282,14 +1286,14 @@ func (m stepsModel) firstState(s stepState) int {
 	return -1
 }
 
-func (m stepsModel) viewFooter() string {
+func (m stepsModel) viewFooter(w int) string {
 	if m.formActive {
 		hint := "[enter] continuar · [esc] cancelar"
 		if m.current >= 0 && m.plan.Steps[m.current].Optional {
 			hint = "[enter] continuar · [esc] omitir"
 		}
-		return lipgloss.NewStyle().MaxWidth(m.width).Render(
-			" " + stFootTxt.Render(truncate(hint, m.width-1)))
+		return lipgloss.NewStyle().MaxWidth(w).Render(
+			" " + stFootTxt.Render(truncate(hint, w-1)))
 	}
 
 	title := shorten(m.plan.Title)
@@ -1306,7 +1310,7 @@ func (m stepsModel) viewFooter() string {
 		parts = append(parts, stFootKey.Render("["+k[0]+"]")+" "+stFootTxt.Render(k[1]))
 	}
 	line := stFootTxt.Render(title) + "  " + strings.Join(parts, stFootSep.Render(" • "))
-	return lipgloss.NewStyle().MaxWidth(m.width).Render(" " + line)
+	return lipgloss.NewStyle().MaxWidth(w).Render(" " + line)
 }
 
 func (m stepsModel) viewHelp() string {
@@ -1328,7 +1332,7 @@ func (m stepsModel) viewHelp() string {
 		lines = append(lines, line)
 	}
 
-	boxW := minInt(maxW+6, maxInt(24, m.width-2))
+	boxW := minInt(maxW+6, maxInt(24, m.width-4))
 	box := stHelpBox.Width(boxW).Render(strings.Join([]string{
 		stHelpTitle.Render("Atajos de teclado"),
 		"",
@@ -1337,11 +1341,12 @@ func (m stepsModel) viewHelp() string {
 		stFaint.Render("pulsa ? para volver"),
 	}, "\n"))
 
-	placed := lipgloss.Place(m.width, m.height-2, lipgloss.Center, lipgloss.Center, box)
+	w, h := m.width-1, m.height-1
+	placed := lipgloss.Place(w, h-2, lipgloss.Center, lipgloss.Center, box)
 	return lipgloss.JoinVertical(lipgloss.Left,
 		placed,
-		stRule.Render(strings.Repeat("─", m.width)),
-		m.viewFooter(),
+		stRule.Render(strings.Repeat("─", w)),
+		m.viewFooter(w),
 	)
 }
 
