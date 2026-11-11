@@ -183,6 +183,42 @@ if [ "$NUXIBA_ENABLED" = "1" ]; then
 fi
 say "Guarda las claves publicas en GitHub/Bitbucket."
 
+# --- copiado al portapapeles ----------------------------------------------
+# Copia la personal (la primera que se pega, en GitHub); la Nuxiba se copia
+# sola al fallar la prueba de Bitbucket en el paso 'Probar llaves SSH'.
+copied=0
+if [ -f "$HOME/.ssh/id_ed25519_personal.pub" ] && ui_copy_clip < "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null; then
+  say "Clave personal copiada al portapapeles; pegala en https://github.com/settings/ssh/new"
+  if ui_open_url "https://github.com/settings/ssh/new" 2>/dev/null; then
+    say "Abriendo la pagina para pegarla"
+  fi
+  copied=1
+fi
+if [ "$NUXIBA_ENABLED" = "1" ] && [ -f "$HOME/.ssh/id_ed25519_nuxiba.pub" ]; then
+  if [ "$copied" = "1" ]; then
+    say "Clave Nuxiba: se copiara al portapapeles automaticamente si la prueba de Bitbucket falla"
+  elif ui_copy_clip < "$HOME/.ssh/id_ed25519_nuxiba.pub" 2>/dev/null; then
+    say "Clave Nuxiba copiada al portapapeles; pegala en https://bitbucket.org/account/settings/ssh-keys/"
+    if ui_open_url "https://bitbucket.org/account/settings/ssh-keys/" 2>/dev/null; then
+      say "Abriendo la pagina para pegarla"
+    fi
+    copied=1
+  fi
+fi
+if [ "$copied" = "0" ]; then
+  {
+    printf '=== Personal/GitHub (pegar en https://github.com/settings/ssh/new)\n'
+    cat "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null
+    if [ "$NUXIBA_ENABLED" = "1" ]; then
+      printf '=== Nuxiba/Bitbucket (pegar en https://bitbucket.org/account/settings/ssh-keys/)\n'
+      cat "$HOME/.ssh/id_ed25519_nuxiba.pub" 2>/dev/null
+    fi
+  } > "$HOME/claves-ssh.txt" 2>/dev/null || true
+  if [ -f "$HOME/claves-ssh.txt" ]; then
+    say "Sin portapapeles: ambas claves guardadas en ~/claves-ssh.txt"
+  fi
+fi
+
 # --- comprobacion SSH (sin spinner dentro del panel) --------------------
 ssh_check() {
   local title="$1" target="$2"
