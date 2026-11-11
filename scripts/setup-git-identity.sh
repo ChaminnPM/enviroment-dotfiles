@@ -106,6 +106,12 @@ if [ "$NUXIBA_ENABLED" = "1" ]; then
   fi
 fi
 
+# --- ~/.ssh/config ---------------------------------------------------------
+# Tres bloques: github.com (personal), el par bitbucket.org/ssh.bitbucket.org
+# y el alias bitbucket-nuxiba; los tres de Bitbucket contra ssh.bitbucket.org
+# (migracion obligatoria de Bitbucket a partir del 12/nov). Se respalda el
+# config previo si existe y difiere, para no perder bloques del usuario.
+ssh_tmp="$(mktemp)"
 {
   echo "Host github.com"
   echo "    HostName github.com"
@@ -114,34 +120,59 @@ fi
   echo "    IdentitiesOnly yes"
   if [ "$NUXIBA_ENABLED" = "1" ]; then
     echo ""
+    echo "Host bitbucket.org ssh.bitbucket.org"
+    echo "    HostName ssh.bitbucket.org"
+    echo "    User git"
+    echo "    IdentityFile ~/.ssh/id_ed25519_nuxiba"
+    echo "    IdentitiesOnly yes"
+    echo ""
     echo "Host bitbucket-nuxiba"
-    echo "    HostName bitbucket.org"
+    echo "    HostName ssh.bitbucket.org"
     echo "    User git"
     echo "    IdentityFile ~/.ssh/id_ed25519_nuxiba"
     echo "    IdentitiesOnly yes"
   fi
-} > "$HOME/.ssh/config"
+} > "$ssh_tmp"
+if [ -f "$HOME/.ssh/config" ] && ! diff -q "$HOME/.ssh/config" "$ssh_tmp" >/dev/null 2>&1; then
+  bak="$HOME/.ssh/config.bak-$(date +%Y%m%d-%H%M%S)"
+  cp "$HOME/.ssh/config" "$bak"
+  say "Backup de ~/.ssh/config previo: $bak"
+fi
+mv "$ssh_tmp" "$HOME/.ssh/config"
 chmod 600 "$HOME/.ssh/config"
 
+# Orden: personal primero, nuxiba despues. gitdir:$HOME engloba todo el home
+# (incluido Documents/Repositorios/) y el ultimo include gana: si nuxiba
+# fuera primero, el perfil personal pisaria al nuxiba en los repos de trabajo.
 cat > "$HOME/.gitconfig" <<EOF
-[includeIf "gitdir:$HOME/Documents/Repositorios/"]
-    path = $HOME/.gitconfig-nuxiba
 [includeIf "gitdir:$HOME/"]
     path = $HOME/.gitconfig-personal
+[includeIf "gitdir:$HOME/Documents/Repositorios/"]
+    path = $HOME/.gitconfig-nuxiba
 EOF
 
-cat > "$HOME/.gitconfig-personal" <<EOF
+# Los perfiles no se pisan si ya existen: el email que el usuario ajusto a mano
+# no debe revertirse al relanzar la instalacion.
+if [ ! -f "$HOME/.gitconfig-personal" ]; then
+  cat > "$HOME/.gitconfig-personal" <<EOF
 [user]
     name = $P_NAME
     email = $P_EMAIL
 EOF
+else
+  say "~/.gitconfig-personal ya existe; se conserva"
+fi
 
 if [ "$NUXIBA_ENABLED" = "1" ]; then
-  cat > "$HOME/.gitconfig-nuxiba" <<EOF
+  if [ ! -f "$HOME/.gitconfig-nuxiba" ]; then
+    cat > "$HOME/.gitconfig-nuxiba" <<EOF
 [user]
     name = $N_NAME
     email = $N_EMAIL
 EOF
+  else
+    say "~/.gitconfig-nuxiba ya existe; se conserva"
+  fi
 fi
 
 gh_fp="$(ssh-keygen -lf "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null | awk '{print $2}' || echo '?')"
