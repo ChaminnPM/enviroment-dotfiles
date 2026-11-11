@@ -189,7 +189,7 @@ ssh_check() {
   ui_seed_known_hosts
   local out
   if out="$(ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 "$target" 2>&1 || true)"; then
-    if printf '%s\n' "$out" | grep -Eiq 'successfully authenticated|logged in as'; then
+    if printf '%s\n' "$out" | grep -Eiq 'successfully authenticated|authenticated via ssh key|logged in as'; then
       say "$title OK"
       return 0
     fi

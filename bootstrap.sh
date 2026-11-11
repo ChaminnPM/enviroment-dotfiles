@@ -167,7 +167,7 @@ ssh_test() {
   local title="$1" target="$2" out
   # StrictHostKeyChecking=accept-new cubre known_hosts sin depender de ui.sh.
   if out="$(ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 "$target" 2>&1 || true)"; then
-    if printf '%s\n' "$out" | grep -Eiq 'successfully authenticated|logged in as'; then
+    if printf '%s\n' "$out" | grep -Eiq 'successfully authenticated|authenticated via ssh key|logged in as'; then
       echo "##log $title OK"
       return 0
     fi
