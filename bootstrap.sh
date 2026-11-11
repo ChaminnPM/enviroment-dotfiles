@@ -141,8 +141,8 @@ bash "$REPO_DIR/scripts/setup-git-identity.sh"
 EOF
 
   ui_panel_inputs <<INPUTS
-key pub_key $HOME/.ssh/id_ed25519_personal.pub Clave publica personal (copiala y pulsa enter):
-key pub_key_nuxiba $HOME/.ssh/id_ed25519_nuxiba.pub Clave publica Nuxiba/Bitbucket (copiala y pulsa enter):
+key pub_key $HOME/.ssh/id_ed25519_personal.pub Clave publica personal (copiada al portapapeles):
+key pub_key_nuxiba $HOME/.ssh/id_ed25519_nuxiba.pub Clave publica Nuxiba (se copia al fallar la prueba):
 confirm probar Probar conexion SSH ahora? y
 INPUTS
   ui_panel_step "Probar llaves SSH" --optional --estimate 30 <<'EOF'
@@ -159,8 +159,20 @@ fi
 
 show_key() {
   local file="${1:-$HOME/.ssh/id_ed25519_personal.pub}"
+  local url="${2:-https://github.com/settings/ssh/new}"
   echo "##log Clave publica:"
   while IFS= read -r l; do echo "##log $l"; done < "$file" 2>/dev/null || true
+  if ui_copy_clip < "$file" 2>/dev/null; then
+    echo "##log Copiada al portapapeles; pegala en $url"
+    if ui_open_url "$url" 2>/dev/null; then
+      echo "##log Abriendo la pagina para pegarla"
+    fi
+  else
+    echo "##log Sin portapapeles; copia la linea de arriba a mano"
+    { printf '=== %s (pegar en %s)\n' "$(basename "$file")" "$url"; cat "$file" 2>/dev/null; } \
+      >> "$HOME/claves-ssh.txt" 2>/dev/null || true
+    echo "##log Respaldo: ~/claves-ssh.txt"
+  fi
 }
 
 ssh_test() {
@@ -176,11 +188,11 @@ ssh_test() {
   return 1
 }
 if ! ssh_test "SSH GitHub" git@github.com; then
-  show_key "$HOME/.ssh/id_ed25519_personal.pub"
+  show_key "$HOME/.ssh/id_ed25519_personal.pub" "https://github.com/settings/ssh/new"
 fi
 if [ -f "$HOME/.ssh/id_ed25519_nuxiba.pub" ]; then
   if ! ssh_test "SSH Bitbucket" git@bitbucket-nuxiba; then
-    show_key "$HOME/.ssh/id_ed25519_nuxiba.pub"
+    show_key "$HOME/.ssh/id_ed25519_nuxiba.pub" "https://bitbucket.org/account/settings/ssh-keys/"
   fi
 else
   echo "##log No hay clave Nuxiba (~/.ssh/id_ed25519_nuxiba.pub); prueba de Bitbucket omitida."
