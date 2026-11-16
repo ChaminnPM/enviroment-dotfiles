@@ -10,7 +10,7 @@ MODE="pull"
 VERBOSE="${VERBOSE:-0}"
 for arg in "$@"; do
   case "$arg" in
-    pull|push) MODE="$arg" ;;
+    pull|push|doctor) MODE="$arg" ;;
     --verbose|verbose|v) VERBOSE=1 ;;
   esac
 done
@@ -46,7 +46,6 @@ PUBLIC_PATHS=(
   "agents/lua-qa.md"
   "agents/net-qa.md"
   "agents/react-qa.md"
-  "agents/analyze-webrtc-dumps.md"
   "plugins/"
   "skills/generate-test-cases/"
   "skills/generate-tests/"
@@ -65,6 +64,76 @@ sync_path() {
     rsync -a "$src" "$dst" >/dev/null 2>&1
   fi
 }
+
+# --- doctor: verificacion de salud del entorno publico --------------------
+if [ "$MODE" = "doctor" ]; then
+  OK=0; WARN=0
+  d_ok()   { printf '\033[0;32m[OK]\033[0m   %s\n' "$1"; OK=$((OK+1)); }
+  d_warn() { printf '\033[0;33m[WARN]\033[0m %s\n' "$1"; WARN=$((WARN+1)); }
+
+  printf '%s\n' "Doctor publico (pin nvm 0.40.8, nui $(cat "$REPO_DIR/bin/VERSION" 2>/dev/null || echo '?')):"
+
+  for c in git curl python3 rsync tar gzip; do
+    if command -v "$c" >/dev/null 2>&1; then
+      d_ok "$c instalado"
+    else
+      d_warn "$c NO instalado (relanza bootstrap.sh para instalarlo)"
+    fi
+  done
+
+  # nvm / node / npm
+  if [ -s "$HOME/.nvm/nvm.sh" ]; then
+    . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
+    nv="$(nvm --version 2>/dev/null || true)"
+    if [ "$nv" = "0.40.8" ]; then
+      d_ok "nvm $nv (pin)"
+    else
+      d_warn "nvm ${nv:-incompleto} (pin 0.40.8); relanza bootstrap.sh para actualizarlo"
+    fi
+    if command -v node >/dev/null 2>&1; then d_ok "node $(node --version)"; else d_warn "node no disponible (nvm install --lts)"; fi
+    if command -v npm >/dev/null 2>&1; then d_ok "npm $(npm --version)"; else d_warn "npm no disponible"; fi
+  else
+    d_warn "nvm no instalado (~/.nvm/nvm.sh no existe)"
+  fi
+
+  # herramientas instaladas por bootstrap
+  command -v opencode >/dev/null 2>&1 && d_ok "opencode $(opencode --version 2>/dev/null || echo '?')" || d_warn "opencode no instalado"
+  command -v herdr >/dev/null 2>&1 && d_ok "herdr instalado" || d_warn "herdr no instalado"
+  grep -q 'oh-my-bash/oh-my-bash.sh' "$HOME/.bashrc" 2>/dev/null && d_ok "oh-my-bash activo en .bashrc" || d_warn "oh-my-bash no esta en .bashrc"
+
+  # nui vs pin del repo
+  pin="$(cat "$REPO_DIR/bin/VERSION" 2>/dev/null || true)"
+  if command -v nui >/dev/null 2>&1 || [ -x "$HOME/.local/bin/nui" ]; then
+    have="$(nui version 2>/dev/null | awk 'NR==1{print $2}')"
+    if [ "$have" = "$pin" ]; then
+      d_ok "nui $have (pin $pin)"
+    else
+      d_warn "nui ${have:-?} (pin $pin); se actualiza al proximo bootstrap.sh"
+    fi
+  else
+    d_warn "nui no instalado (la UI usara fallback textual)"
+  fi
+
+  # skills externas: repo vs instalado
+  for s in graphify security-audit; do
+    read_ref() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('upstream_ref',''))" "$1" 2>/dev/null || true; }
+    want="$(read_ref "$REPO_DIR/config/opencode/skills/$s/VERSION.json")"
+    have="$(read_ref "$OPENCODE_DIR/skills/$s/VERSION.json")"
+    if [ -z "$want" ]; then
+      d_warn "skill $s sin VERSION.json en el repo"
+    elif [ "$want" = "$have" ]; then
+      d_ok "skill $s ($want)"
+    else
+      d_warn "skill $s instalada ${have:-?}, repo $want; sync-dotfiles pull la actualiza"
+    fi
+  done
+
+  # claves SSH
+  [ -f "$HOME/.ssh/id_ed25519_personal" ] && d_ok "clave SSH personal presente" || d_warn "sin ~/.ssh/id_ed25519_personal"
+
+  printf '%s\n' "Resumen: $OK OK, $WARN avisos"
+  [ "$WARN" -eq 0 ] && exit 0 || exit 1
+fi
 
 ui_clear
 ui_banner "Sync publico"
@@ -94,7 +163,7 @@ case "$MODE" in
     ui_summary "Sincronizado (push publico)" "Repo publico actualizado"
     ;;
   *)
-    ui_error "Uso: $0 {push|pull}"
+    ui_error "Uso: $0 {push|pull|doctor}"
     exit 1
     ;;
 esac

@@ -394,7 +394,7 @@ export NVM_DIR="$HOME/.nvm"
 if ! command -v node >/dev/null 2>&1; then
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
     echo "##log Instalando nvm"
-    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash >/dev/null 2>&1 \
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash >/dev/null 2>&1 \
       || echo "##warn No se pudo instalar nvm automáticamente"
   fi
   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
@@ -405,6 +405,29 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
 echo "Node $(node --version 2>/dev/null || echo '?')"
+EOF
+
+ui_panel_step "Actualizar nvm (opcional)" --optional --estimate 30 <<'EOF'
+NVM_DIR="$HOME/.nvm"
+if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+  echo "##log nvm no instalado; nada que actualizar"
+  exit 0
+fi
+. "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+cur="$(nvm --version 2>/dev/null || true)"
+want="0.40.8"
+if [ "$cur" = "$want" ]; then
+  echo "##log nvm $cur ya esta en la version fijada"
+  exit 0
+fi
+echo "##log Actualizando nvm $cur -> $want"
+if curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v${want}/install.sh" | bash >/dev/null 2>&1 \
+  && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; then
+  echo "##log nvm ahora: $(nvm --version 2>/dev/null || echo '?')"
+else
+  echo "##warn No se pudo actualizar nvm a $want"
+  exit 1
+fi
 EOF
 
 ui_panel_step "OpenCode" --estimate 90 <<'EOF'
@@ -441,6 +464,37 @@ fi
 echo "Configuración restaurada"
 EOF
 
+ui_panel_step "Alacritty (opcional)" --optional --estimate 5 <<'EOF'
+if ! command -v alacritty >/dev/null 2>&1; then
+  echo "##log Alacritty no detectado; paso omitido"
+  exit 0
+fi
+
+AL_VER="$(alacritty --version 2>/dev/null | sed -n 's/^Alacritty \([0-9][0-9.]*\).*/\1/p')"
+AL_MAJOR="${AL_VER%%.*}"
+AL_MINOR="${AL_VER#*.}"
+AL_MINOR="${AL_MINOR%%.*}"
+if [ "${AL_MAJOR:-0}" -lt 0 ] || { [ "${AL_MAJOR:-0}" -eq 0 ] && [ "${AL_MINOR:-0}" -lt 13 ]; }; then
+  echo "##warn Alacritty ${AL_VER:-desconocida} detectado; la config TOML requiere >= 0.13"
+  echo "##log Paso omitido para no sobrescribir configuracion incompatible"
+  exit 0
+fi
+
+AL_DIR="$HOME/.config/alacritty"
+if [ -f "$AL_DIR/alacritty.toml" ] || [ -f "$AL_DIR/alacritty.yml" ]; then
+  echo "##log Ya existe configuracion de alacritty en $AL_DIR; no se sobrescribe"
+  exit 0
+fi
+
+mkdir -p "$AL_DIR"
+if cp "$REPO_DIR/config/alacritty/alacritty.toml" "$AL_DIR/alacritty.toml" 2>/dev/null; then
+  echo "##log Config de alacritty instalada en $AL_DIR/alacritty.toml"
+else
+  echo "##warn No se pudo copiar la configuracion de alacritty"
+  exit 1
+fi
+EOF
+
 ui_panel_step "graphify" --estimate 15 <<'EOF'
 mkdir -p "$OPENCODE_DIR/skills"
 if [ -d "$REPO_DIR/config/opencode/skills/graphify" ]; then
@@ -456,6 +510,14 @@ fi
 EOF
 
 ui_panel_step "oh-my-bash" --estimate 45 <<'EOF'
+# Respaldo unico de .bashrc antes de la primera modificacion
+if [ -f "$HOME/.bashrc" ] && ! ls "$HOME"/.bashrc.bak-dotfiles-* >/dev/null 2>&1; then
+  if cp -p "$HOME/.bashrc" "$HOME/.bashrc.bak-dotfiles-$(date +%Y%m%d-%H%M%S)" 2>/dev/null; then
+    echo "##log Respaldo de .bashrc creado"
+  else
+    echo "##warn No se pudo crear el respaldo de .bashrc"
+  fi
+fi
 if [ ! -d "$HOME/.oh-my-bash" ]; then
   echo "##log Clonando oh-my-bash"
   git clone https://github.com/ohmybash/oh-my-bash.git "$HOME/.oh-my-bash" >/dev/null 2>&1 \

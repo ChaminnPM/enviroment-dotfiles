@@ -1,0 +1,60 @@
+# alacritty.toml - config base portable (requiere alacritty >= 0.13)
+# Original de Windows: C:\Users\NUXIBA\AppData\Roaming\alacritty\alacritty.toml
+# Adaptacion Linux: se omiten working_directory y shell de wsl.exe (especificos de Windows).
+# Referencia completa: https://github.com/alacritty/alacritty/blob/master/extra/alacritty.toml
+
+[general]
+live_config_reload = true
+
+[font]
+size = 10.0
+
+[font.normal]
+family = "JetBrainsMono Nerd Font"
+
+[font.bold]
+family = "JetBrains Mono"
+style = "Bold"
+
+[font.italic]
+family = "JetBrains Mono"
+style = "Italic"
+
+[font.bold_italic]
+family = "JetBrains Mono"
+style = "Bold Italic"
+
+# Aura Theme
+# Default colors
+[colors.primary]
+background = '#15141b'
+foreground = '#edecee'
+
+# Normal colors
+[colors.normal]
+black   = '#110f18'
+red     = '#ff6767'
+green   = '#61ffca'
+yellow  = '#ffca85'
+blue    = '#a277ff'
+magenta = '#a277ff'
+cyan    = '#61ffca'
+white   = '#edecee'
+
+# Bright colors
+[colors.bright]
+black   = '#4d4d4d'
+red     = '#ff6767'
+green   = '#61ffca'
+yellow   = '#ffca85'
+blue    = '#a277ff'
+magenta = '#a277ff'
+cyan    = '#61ffca'
+white   = '#edecee'
+
+[colors.selection]
+text       = 'CellForeground'
+background = '#29263c'
+
+[colors.cursor]
+cursor = '#a277ff'

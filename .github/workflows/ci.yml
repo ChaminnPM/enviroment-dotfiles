@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    name: bash + shellcheck + TOML
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sintaxis bash
+        run: |
+          set -e
+          bash -n install.sh
+          bash -n bootstrap.sh
+          bash -n scripts/sync.sh
+          bash -n scripts/lib/ui.sh
+          bash -n scripts/setup-git-identity.sh
+          bash -n scripts/update-external-skills.sh
+          for f in ui/examples/split-panel/*.sh; do
+            [ -f "$f" ] && bash -n "$f" || true
+          done
+
+      - name: shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          fi
+          shellcheck -S warning install.sh bootstrap.sh scripts/sync.sh \
+            scripts/lib/ui.sh scripts/setup-git-identity.sh \
+            scripts/update-external-skills.sh
+
+      - name: Validar TOML de alacritty
+        run: |
+          python3 - <<'EOF'
+          import tomllib, glob, sys
+          for f in glob.glob('config/alacritty/**/*.toml', recursive=True):
+              tomllib.load(open(f, 'rb'))
+              print(f'{f}: OK')
+          EOF
+
+      - name: Validar JSON del repo
+        run: |
+          python3 - <<'EOF'
+          import json, glob, sys
+          files = glob.glob('config/opencode/**/*.json', recursive=True) \
+                + glob.glob('config/opencode/plugins/**/package.json', recursive=True) \
+                + glob.glob('bin/VERSION')
+          for f in files:
+              if f.endswith('VERSION'):
+                  assert open(f).read().strip(), f'{f} vacio'
+                  print(f'{f}: OK')
+                  continue
+              json.load(open(f))
+              print(f'{f}: OK')
+          EOF
+
+      - name: Consistencia VERSION de nui
+        run: |
+          bin_v="$(cat bin/VERSION)"
+          ui_v="$(cat ui/VERSION)"
+          [ "$bin_v" = "$ui_v" ] || {
+            echo "bin/VERSION ($bin_v) != ui/VERSION ($ui_v)"; exit 1; }
+          echo "nui v$bin_v consistente"

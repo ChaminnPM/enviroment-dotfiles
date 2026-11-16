@@ -1,0 +1,12 @@
+# Config privada que nunca debe subirse
+config/opencode/service.json
+config/opencode/node_modules/
+config/opencode/*.local.jsonc
+
+# Reportes y logs locales
+reports/
+*.log
+
+# Build local de la TUI
+ui/nui
+ui/dist/

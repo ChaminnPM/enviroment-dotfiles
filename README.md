@@ -1,6 +1,6 @@
 # enviroment-dotfiles (publico)
 
-Configuracion portable de OpenCode para Linux/macOS.
+Configuracion portable de OpenCode para **Linux** (Debian/Ubuntu, apt-get).
 
 ## One-liner
 ```bash
@@ -37,12 +37,20 @@ El one-liner descarga el repo como **tarball** y no requiere `git` para empezar.
 
 ## Contenido publico
 - `config/opencode/`: config global de OpenCode, sin contenido Nuxiba.
-- `agents/`: `net-qa`, `react-qa`, `lua-qa`, `analyze-webrtc-dumps`.
+- `config/alacritty/`: config base de Alacritty (TOML, requiere alacritty >= 0.13); solo se instala si `alacritty` esta en el PATH y no existe configuracion previa. `windows/` guarda la copia exacta de la config de Windows (arranque de WSL Debian); la raiz es la version portable adaptada a Linux.
+- `agents/`: `net-qa`, `react-qa`, `lua-qa`. (`analyze-webrtc-dumps` vive en el repo privado.)
 - `skills/`: `generate-test-cases`, `generate-tests`, `graphify` (externa), `security-audit` (externa).
 - `plugins/`: `herdr-agent-state.js`, `usage-limits`.
 - `memory/skills-best-practices.md`: guia de escritura de skills/agents.
 - `AGENTS.md`: instrucciones generales con graphify.
 - `scripts/`: instalacion, sincronizacion, identidad Git y actualizacion de skills externas.
+- `.github/workflows/ci.yml`: CI con bash -n, shellcheck y validacion de TOML/JSON en cada push.
+
+## service.json.example
+`service.json.example` es la plantilla de configuracion privada local. Se copia a
+`~/.config/opencode/service.json` (fuera del repo; el push lo excluye siempre) y se
+rellena con credenciales o ajustes que no deben versionarse. No existe en la
+instalacion hasta que la crees manualmente a partir del ejemplo.
 
 ## Skills externas
 - `graphify`: https://github.com/Graphify-Labs/graphify
@@ -59,10 +67,13 @@ La instalacion no deja repos locales. Usa los wrappers instalados en `~/.local/b
 ```bash
 sync-dotfiles pull
 sync-dotfiles push
+sync-dotfiles doctor
 
 sync-dotfiles-private pull
 sync-dotfiles-private push
 ```
+
+`doctor` verifica el estado del entorno (versiones vs pins, skills externas, claves SSH) y sale 1 si hay avisos.
 
 Los wrappers verifican que exista `git` antes de sincronizar.
 
@@ -81,7 +92,7 @@ bash scripts/sync.sh push
 ```
 
 ## Requiere
-- Base: `git`, `curl`, `bash`, `python3`, `node` (nvm), `npm`, `rsync`, `openssh-client`, `xdg-utils`, `tar`, `gzip`.
+- Base: `git`, `curl`, `bash`, `python3`, `node` (nvm), `npm`, `rsync`, `openssh-client`, `xdg-utils`, `tar`, `gzip` (instalados por `bootstrap.sh` si faltan).
 - `nui`: binario estatico propio (bubbletea + lipgloss) que se instala automaticamente desde `bin/nui-<os>-<arch>.gz` (o `NUI_BASE_URL`).
 - `herdr` y `oh-my-bash`: se instalan automaticamente.
 
@@ -113,5 +124,5 @@ sync-dotfiles push --verbose
 El one-liner inicial usa un fallback silencioso antes de tener `nui`; cuando `nui` ya esta disponible muestra banners, spinners, prompts y reporte final.
 
 - Los scripts usan `nui` para mejorar legibilidad y tienen fallback textual/ANSI.
-- `analyze-webrtc-dumps` es un **agente**, no una skill.
+- `analyze-webrtc-dumps` es un **agente**, no una skill; se gestiona desde el repo privado.
 - El repo publico no debe contener assets Nuxiba privados.
