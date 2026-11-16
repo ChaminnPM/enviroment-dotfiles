@@ -128,8 +128,37 @@ if [ "$MODE" = "doctor" ]; then
     fi
   done
 
-  # claves SSH
+  # claves SSH y cuentas git (manifiesto generado por setup-git-identity.sh)
   [ -f "$HOME/.ssh/id_ed25519_personal" ] && d_ok "clave SSH personal presente" || d_warn "sin ~/.ssh/id_ed25519_personal"
+  if [ -f "$HOME/.config/git-accounts.sh" ]; then
+    # shellcheck disable=SC1090
+    . "$HOME/.config/git-accounts.sh"
+    d_ok "manifiesto de cuentas git (personal: $PERSONAL_PLATFORM)"
+    grep -q '# >>> dotfiles-managed' "$HOME/.ssh/config" 2>/dev/null \
+      && d_ok "seccion SSH gestionada presente" || d_warn "~/.ssh/config sin seccion gestionada"
+    for slug in ${GIT_ACCOUNT_SLUGS:-}; do
+      u="$(printf '%s' "$slug" | tr 'a-z-' 'A-Z_')"
+      eval "esp=\"\${ACC_${u}_ESPACIO:-}\""
+      eval "folder=\"\${ACC_${u}_FOLDER:-}\""
+      if [ -f "$HOME/.ssh/id_ed25519_$slug" ]; then
+        d_ok "clave $esp presente"
+      else
+        d_warn "sin clave para el espacio $esp"
+      fi
+      if [ -d "$folder" ]; then
+        d_ok "carpeta $folder presente"
+      else
+        d_warn "carpeta $folder no existe"
+      fi
+      if grep -q "gitdir:$folder/" "$HOME/.gitconfig" 2>/dev/null; then
+        d_ok "includeIf de $esp activo"
+      else
+        d_warn "sin includeIf para $esp en ~/.gitconfig"
+      fi
+    done
+  else
+    d_warn "sin ~/.config/git-accounts.sh (relanza bootstrap.sh para configurar cuentas)"
+  fi
 
   printf '%s\n' "Resumen: $OK OK, $WARN avisos"
   [ "$WARN" -eq 0 ] && exit 0 || exit 1

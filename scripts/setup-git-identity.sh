@@ -1,7 +1,29 @@
 #!/usr/bin/env bash
-# setup-git-identity.sh - configura identidad(es) git.
+# setup-git-identity.sh - configura identidad(es) git multi-cuenta.
+#
+# Modelo de cuentas:
+#   - Cuenta personal (obligatoria): clave ~/.ssh/id_ed25519_personal y perfil
+#     ~/.gitconfig-personal; actua en todo el sistema (includeIf "gitdir:$HOME/").
+#   - Hasta 3 cuentas opcionales ("espacios"): cada una vive en $HOME/<Espacio>
+#     con clave id_ed25519_<slug>, perfil ~/.gitconfig-<slug> y alias SSH
+#     git-<slug>. Un includeIf por carpeta cambia user.name/email y un bloque
+#     url.insteadOf reescribe los remotes de su plataforma al alias, de modo
+#     que dentro de la carpeta se usa la clave de esa cuenta aunque la
+#     plataforma coincida con la de la personal.
+#     Limitacion documentada: un repo personal clonado DENTRO de la carpeta de
+#     un espacio usara la clave de ese espacio para la plataforma de este.
+#   - Estado: ~/.config/git-accounts.sh (manifiesto generado; lo leen el paso
+#     'Probar llaves SSH' del bootstrap y 'sync-dotfiles doctor').
+#   - ~/.ssh/config: solo se regenera la seccion entre los marcadores
+#     "# >>> dotfiles-managed" / "# <<< dotfiles-managed"; el resto se
+#     conserva (el bloque gestionado va primero y tiene prioridad en ssh).
+#   - Migracion: si detecta el esquema viejo (Nuxiba en
+#     ~/Documents/Repositorios + ~/.gitconfig-nuxiba) y hay exactamente una
+#     cuenta opcional, mueve el contenido a la carpeta del espacio.
+#
 # Modo panel: los valores vienen de $NUI_STEP_RESULT (los pide el panel).
-# Modo standalone: se piden con nui input (sin banners).
+# Modo standalone: se piden con ui_input/read; tambien acepta variables
+# GIT_PERSONAL_* y GIT_ACC<i>_* para ejecucion no interactiva.
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -16,42 +38,51 @@ if [ -n "${NUI_STEP_RESULT:-}" ] && [ -f "$NUI_STEP_RESULT" ]; then
   PANEL_MODE=1
 fi
 
-log_line() { printf '%s\n' "$*"; }
-# En modo panel, ##log alimenta la columna de logs; en standalone es texto plano.
 say() {
-  if [ "$PANEL_MODE" = "1" ]; then printf '##log %s\n' "$*"; else log_line "$*"; fi
+  if [ "$PANEL_MODE" = "1" ]; then printf '##log %s\n' "$*"; else printf '%s\n' "$*"; fi
 }
 
 _ask() {
   local prompt="$1" env_name="$2" default="${3:-}" value=""
   if [ "$PANEL_MODE" = "1" ]; then
     value="${!env_name:-}"
-  elif ui_have; then
-    value="$(ui_input "$prompt" "$default")" || value=""
-  elif [ -t 0 ]; then
-    read -rp "$prompt " value
+  elif [ -n "${!env_name:-}" ]; then
+    value="${!env_name}"
+  elif ui_interactive; then
+    if ui_have; then
+      value="$(ui_input "$prompt" "$default")" || value=""
+    else
+      read -rp "$prompt " value || value=""
+    fi
   fi
-  if [ -z "$value" ]; then
-    value="${!env_name:-$default}"
-  fi
+  if [ -z "$value" ]; then value="$default"; fi
   printf '%s' "$value"
 }
 
-mkdir -p "$HOME/.ssh"
-chmod 700 "$HOME/.ssh"
+norm_platform() {
+  case "${1:-}" in bitbucket) printf 'bitbucket' ;; *) printf 'github' ;; esac
+}
 
-# --- cuenta personal (GitHub) -------------------------------------------
-if [ "$PANEL_MODE" = "1" ]; then
-  P_NAME="${p_name:-}"
-  P_EMAIL="${p_email:-}"
-else
-  P_NAME="$(_ask "Nombre (GitHub):" GIT_PERSONAL_NAME "")"
-  P_EMAIL="$(_ask "Email (GitHub):" GIT_PERSONAL_EMAIL "")"
-fi
-if [ -z "$P_NAME" ] || [ -z "$P_EMAIL" ]; then
-  say "Identidad GitHub omitida (nombre/email vacíos)."
-  exit 0
-fi
+slugify() {
+  local s="$1"
+  s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')"
+  s="$(printf '%s' "$s" | iconv -f utf-8 -t ascii//TRANSLIT 2>/dev/null || printf '%s' "$s")"
+  printf '%s' "$s" | sed -e 's/[^a-z0-9_-]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'
+}
+
+platform_url() {
+  case "$1" in
+    bitbucket) printf 'https://bitbucket.org/account/settings/ssh-keys/' ;;
+    *) printf 'https://github.com/settings/ssh/new' ;;
+  esac
+}
+
+platform_host() {
+  case "$1" in
+    bitbucket) printf 'bitbucket.org' ;;
+    *) printf 'github.com' ;;
+  esac
+}
 
 run_cmd() {
   # run_cmd <comando>: en panel emite ##log y guarda el log; standalone directo.
@@ -64,6 +95,117 @@ run_cmd() {
   bash -c "$1"
 }
 
+mkdir -p "$HOME/.ssh" "$HOME/.config"
+chmod 700 "$HOME/.ssh"
+
+# --- cuenta personal (obligatoria) -----------------------------------------
+if [ "$PANEL_MODE" = "1" ]; then
+  P_PLATFORM="$(norm_platform "$(_ask '' p_platform github)")"
+  P_NAME="$(_ask '' p_name '')"
+  P_EMAIL="$(_ask '' p_email '')"
+else
+  P_PLATFORM="$(norm_platform "$(_ask 'Plataforma personal (github|bitbucket):' GIT_PERSONAL_PLATFORM github)")"
+  P_NAME="$(_ask 'Nombre personal:' GIT_PERSONAL_NAME '')"
+  P_EMAIL="$(_ask 'Email personal:' GIT_PERSONAL_EMAIL '')"
+fi
+if [ -z "$P_NAME" ] || [ -z "$P_EMAIL" ]; then
+  say "Identidad personal omitida (nombre/email vacíos)."
+  exit 0
+fi
+
+# --- cuentas opcionales (0-3) -----------------------------------------------
+ACC_SLUG=(); ACC_ESPACIO=(); ACC_PLATFORM=(); ACC_NAME=(); ACC_EMAIL=(); ACC_FOLDER=()
+ACC_FAIL=()
+
+add_account() { # <espacio> <plataforma> <nombre> <email>
+  local esp="$1" plt nam="$3" eml="$4" slug folder rfolder rf
+  local n idx bad
+  case "$esp" in ''|.*|*/*) say "Espacio invalido ('$esp'); cuenta omitida"; return 1 ;; esac
+  plt="$(norm_platform "$2")"
+  slug="$(slugify "$esp")"
+  if [ -z "$slug" ]; then
+    say "No se pudo normalizar el espacio '$esp'; cuenta omitida"
+    return 1
+  fi
+  n=${#ACC_SLUG[@]}
+  for ((idx = 0; idx < n; idx++)); do
+    if [ "${ACC_SLUG[$idx]}" = "$slug" ]; then
+      say "Espacio duplicado ($slug); cuenta omitida"
+      return 1
+    fi
+  done
+  folder="$HOME/$esp"
+  rfolder="$(realpath -m "$folder")"
+  for ((idx = 0; idx < n; idx++)); do
+    rf="$(realpath -m "${ACC_FOLDER[$idx]}")"
+    case "$rfolder/" in "$rf"/*)
+      say "La carpeta '$esp' esta dentro de otra cuenta; cuenta omitida"; return 1 ;;
+    esac
+    case "$rf/" in "$rfolder"/*)
+      say "La carpeta '$esp' contiene otra cuenta; cuenta omitida"; return 1 ;;
+    esac
+  done
+  if [ -d "$folder" ] && [ -n "$(ls -A "$folder" 2>/dev/null)" ]; then
+    say "Aviso: $folder ya existe con contenido; no se toca nada"
+  fi
+  mkdir -p "$folder" 2>/dev/null || true
+  ACC_SLUG+=("$slug"); ACC_ESPACIO+=("$esp"); ACC_PLATFORM+=("$plt")
+  ACC_NAME+=("$nam"); ACC_EMAIL+=("$eml"); ACC_FOLDER+=("$folder")
+  return 0
+}
+
+# Indices de cuentas cuya clave se genero bien.
+ok_indices() {
+  local idx slug f bad
+  for ((idx = 0; idx < ${#ACC_SLUG[@]}; idx++)); do
+    slug="${ACC_SLUG[$idx]}"
+    bad=0
+    for f in ${ACC_FAIL[@]+"${ACC_FAIL[@]}"}; do
+      [ "$f" = "$slug" ] && bad=1
+    done
+    [ "$bad" = "0" ] && printf '%d\n' "$idx"
+  done
+  return 0
+}
+
+if [ "$PANEL_MODE" = "1" ]; then
+  count="$(_ask '' acc_count 0)"
+else
+  count="$(_ask '¿Cuantas cuentas adicionales (0-3)?:' GIT_ACC_COUNT 0)"
+fi
+case "$count" in 0|1|2|3) ;; *) count=0 ;; esac
+
+i=1
+while [ "$i" -le "$count" ]; do
+  if [ "$PANEL_MODE" = "1" ]; then
+    esp="$(_ask '' "acc${i}_espacio" '')"
+    plt="$(_ask '' "acc${i}_platform" 'github')"
+    nam="$(_ask '' "acc${i}_name" '')"
+    eml="$(_ask '' "acc${i}_email" '')"
+  else
+    esp="$(_ask "Espacio $i (carpeta en tu home, ej. Nuxiba):" "GIT_ACC${i}_ESPACIO" '')"
+    plt="$(_ask "Plataforma cuenta $i (github|bitbucket):" "GIT_ACC${i}_PLATFORM" 'github')"
+    nam="$(_ask "Nombre cuenta $i:" "GIT_ACC${i}_NAME" '')"
+    eml="$(_ask "Email cuenta $i:" "GIT_ACC${i}_EMAIL" '')"
+  fi
+  if [ -z "$esp" ]; then
+    say "Cuenta $i sin espacio; omitida"
+  else
+    if [ -z "$nam" ] && [ -z "$eml" ]; then
+      nam="$P_NAME"
+      eml="$P_EMAIL"
+      say "Cuenta $i: sin nombre/email; se usan los personales"
+    fi
+    if [ -n "$nam" ] && [ -n "$eml" ]; then
+      add_account "$esp" "$plt" "$nam" "$eml" || true
+    else
+      say "Cuenta $i incompleta; omitida"
+    fi
+  fi
+  i=$((i + 1))
+done
+
+# --- claves SSH -------------------------------------------------------------
 if [ ! -f "$HOME/.ssh/id_ed25519_personal" ]; then
   say "Generando clave personal..."
   run_cmd "ssh-keygen -t ed25519 -C '$P_EMAIL' -f '$HOME/.ssh/id_ed25519_personal' -N '' >/dev/null 2>&1" || {
@@ -72,154 +214,200 @@ if [ ! -f "$HOME/.ssh/id_ed25519_personal" ]; then
   }
 fi
 
-# --- cuenta NUXIBA (Bitbucket, opcional) --------------------------------
-NUXIBA_ENABLED=0
-if [ "$PANEL_MODE" = "1" ]; then
-  NUXIBA_ENABLED=0
-  case "${nuxiba:-false}" in true) NUXIBA_ENABLED=1 ;; esac
-  N_NAME="${n_name:-}"
-  N_EMAIL="${n_email:-}"
-else
-  if ! ui_interactive && [ "${GIT_NUXIBA_ENABLED:-}" != "1" ]; then
-    say "Cuenta Nuxiba omitida (no interactivo)."
-  elif ui_ask "¿Configurar cuenta NUXIBA (Bitbucket)?"; then
-    N_NAME="$(_ask "Nombre (Nuxiba):" GIT_NUXIBA_NAME "")"
-    N_EMAIL="$(_ask "Email (Nuxiba):" GIT_NUXIBA_EMAIL "")"
-    [ -n "$N_NAME" ] && [ -n "$N_EMAIL" ] && NUXIBA_ENABLED=1
+for idx in $(ok_indices); do
+  key="$HOME/.ssh/id_ed25519_${ACC_SLUG[$idx]}"
+  if [ ! -f "$key" ]; then
+    say "Generando clave ${ACC_ESPACIO[$idx]}..."
+    if ! run_cmd "ssh-keygen -t ed25519 -C '${ACC_EMAIL[$idx]}' -f '$key' -N '' >/dev/null 2>&1"; then
+      say "No se pudo generar la clave ${ACC_ESPACIO[$idx]}; cuenta desactivada"
+      ACC_FAIL+=("${ACC_SLUG[$idx]}")
+    fi
+  fi
+done
+
+# --- migracion del esquema viejo --------------------------------------------
+LEGACY_DIR="$HOME/Documents/Repositorios"
+KEEP_LEGACY_INCLUDE=0
+legacy_include=0
+if [ -f "$HOME/.gitconfig" ] && grep -q 'Documents/Repositorios' "$HOME/.gitconfig" 2>/dev/null; then
+  legacy_include=1
+fi
+legacy_content=0
+if [ -d "$LEGACY_DIR" ] && [ -n "$(ls -A "$LEGACY_DIR" 2>/dev/null)" ]; then
+  legacy_content=1
+fi
+
+if [ "${#ACC_SLUG[@]}" -eq 1 ] && [ "$legacy_content" = "1" ]; then
+  target="${ACC_FOLDER[0]}"
+  if [ "$(realpath -m "$target")" = "$(realpath -m "$LEGACY_DIR")" ]; then
+    say "Migracion: la carpeta del espacio ya es $LEGACY_DIR; no se mueve nada"
   else
-    say "Cuenta Nuxiba no configurada."
+    mkdir -p "$target"
+    shopt -s dotglob nullglob
+    moved=0
+    for item in "$LEGACY_DIR"/*; do
+      if mv -- "$item" "$target"/; then moved=$((moved + 1)); fi
+    done
+    shopt -u dotglob nullglob
+    say "Migracion: $moved elementos de $LEGACY_DIR -> $target"
+    rmdir "$LEGACY_DIR" 2>/dev/null || true
   fi
+elif [ "$legacy_include" = "1" ] && [ -f "$HOME/.gitconfig-nuxiba" ]; then
+  KEEP_LEGACY_INCLUDE=1
+  say "Esquema viejo: se conserva el include de ~/Documents/Repositorios; mueve esos repos a la carpeta de un espacio y relanza"
+elif [ "$legacy_include" = "1" ]; then
+  say "Esquema viejo: los repos de ~/Documents/Repositorios quedaran con identidad personal; muevelos a la carpeta del espacio que corresponda"
 fi
 
-if [ "$NUXIBA_ENABLED" = "1" ]; then
-  if [ -z "$N_NAME" ] || [ -z "$N_EMAIL" ]; then
-    N_NAME="${N_NAME:-$P_NAME}"
-    N_EMAIL="${N_EMAIL:-$P_EMAIL}"
-    say "Nuxiba: no se indicaron nombre/email; se usan los personales."
-  fi
-  if [ ! -f "$HOME/.ssh/id_ed25519_nuxiba" ]; then
-    say "Generando clave Nuxiba..."
-    run_cmd "ssh-keygen -t ed25519 -C '$N_EMAIL' -f '$HOME/.ssh/id_ed25519_nuxiba' -N '' >/dev/null 2>&1" || {
-      say "No se pudo generar la clave Nuxiba."
-      NUXIBA_ENABLED=0
-    }
-  fi
-fi
-
-# --- ~/.ssh/config ---------------------------------------------------------
-# Tres bloques: github.com (personal), el par bitbucket.org/ssh.bitbucket.org
-# y el alias bitbucket-nuxiba; los tres de Bitbucket contra ssh.bitbucket.org
-# (migracion obligatoria de Bitbucket a partir del 12/nov). Se respalda el
-# config previo si existe y difiere, para no perder bloques del usuario.
+# --- ~/.ssh/config (seccion gestionada) --------------------------------------
 ssh_tmp="$(mktemp)"
 {
-  echo "Host github.com"
-  echo "    HostName github.com"
-  echo "    User git"
-  echo "    IdentityFile ~/.ssh/id_ed25519_personal"
-  echo "    IdentitiesOnly yes"
-  if [ "$NUXIBA_ENABLED" = "1" ]; then
-    echo ""
-    echo "Host bitbucket.org ssh.bitbucket.org"
-    echo "    HostName ssh.bitbucket.org"
-    echo "    User git"
-    echo "    IdentityFile ~/.ssh/id_ed25519_nuxiba"
-    echo "    IdentitiesOnly yes"
-    echo ""
-    echo "Host bitbucket-nuxiba"
-    echo "    HostName ssh.bitbucket.org"
-    echo "    User git"
-    echo "    IdentityFile ~/.ssh/id_ed25519_nuxiba"
-    echo "    IdentitiesOnly yes"
+  printf '# >>> dotfiles-managed (setup-git-identity.sh) - no editar entre los marcadores\n'
+  if [ "$P_PLATFORM" = "bitbucket" ]; then
+    printf 'Host bitbucket.org ssh.bitbucket.org\n    HostName ssh.bitbucket.org\n    User git\n    IdentityFile ~/.ssh/id_ed25519_personal\n    IdentitiesOnly yes\n'
+  else
+    printf 'Host github.com\n    HostName github.com\n    User git\n    IdentityFile ~/.ssh/id_ed25519_personal\n    IdentitiesOnly yes\n'
   fi
+  # Alias de compatibilidad: clone-repos.sh (repo privado) usa git@bitbucket-nuxiba:
+  compat=0
+  for idx in $(ok_indices); do
+    if [ "$compat" = "0" ] && [ "${ACC_PLATFORM[$idx]}" = "bitbucket" ]; then
+      printf 'Host bitbucket-nuxiba\n    HostName ssh.bitbucket.org\n    User git\n    IdentityFile ~/.ssh/id_ed25519_%s\n    IdentitiesOnly yes\n' "${ACC_SLUG[$idx]}"
+      compat=1
+    fi
+  done
+  for idx in $(ok_indices); do
+    if [ "${ACC_PLATFORM[$idx]}" = "bitbucket" ]; then
+      printf 'Host git-%s\n    HostName ssh.bitbucket.org\n' "${ACC_SLUG[$idx]}"
+    else
+      printf 'Host git-%s\n    HostName github.com\n' "${ACC_SLUG[$idx]}"
+    fi
+    printf '    User git\n    IdentityFile ~/.ssh/id_ed25519_%s\n    IdentitiesOnly yes\n' "${ACC_SLUG[$idx]}"
+  done
+  printf '# <<< dotfiles-managed\n'
 } > "$ssh_tmp"
-if [ -f "$HOME/.ssh/config" ] && ! diff -q "$HOME/.ssh/config" "$ssh_tmp" >/dev/null 2>&1; then
-  bak="$HOME/.ssh/config.bak-$(date +%Y%m%d-%H%M%S)"
-  cp "$HOME/.ssh/config" "$bak"
-  say "Backup de ~/.ssh/config previo: $bak"
-fi
-mv "$ssh_tmp" "$HOME/.ssh/config"
-chmod 600 "$HOME/.ssh/config"
 
-# Orden: personal primero, nuxiba despues. gitdir:$HOME engloba todo el home
-# (incluido Documents/Repositorios/) y el ultimo include gana: si nuxiba
-# fuera primero, el perfil personal pisaria al nuxiba en los repos de trabajo.
-cat > "$HOME/.gitconfig" <<EOF
-[includeIf "gitdir:$HOME/"]
-    path = $HOME/.gitconfig-personal
-[includeIf "gitdir:$HOME/Documents/Repositorios/"]
-    path = $HOME/.gitconfig-nuxiba
-EOF
+cfg="$HOME/.ssh/config"
+rest_tmp="$(mktemp)"
+if [ -f "$cfg" ]; then
+  # Conserva todo lo que este fuera del bloque gestionado anterior.
+  awk 'BEGIN{skip=0} /^# >>> dotfiles-managed/{skip=1; next} /^# <<< dotfiles-managed/{skip=0; next} skip==0{print}' "$cfg" \
+    | sed -e '/./,$!d' > "$rest_tmp" || true
+  if grep -qE '^Host (github\.com|bitbucket\.org|ssh\.bitbucket\.org)' "$rest_tmp" 2>/dev/null; then
+    say "~/.ssh/config: bloques previos conservados fuera de la seccion gestionada (el bloque gestionado tiene prioridad)"
+  fi
+fi
+{ cat "$ssh_tmp"; cat "$rest_tmp"; } > "$cfg"
+chmod 600 "$cfg"
+rm -f "$ssh_tmp" "$rest_tmp"
+
+# --- ~/.gitconfig (includes por carpeta) -------------------------------------
+{
+  printf '[includeIf "gitdir:%s/"]\n    path = %s/.gitconfig-personal\n' "$HOME" "$HOME"
+  if [ "$KEEP_LEGACY_INCLUDE" = "1" ]; then
+    printf '[includeIf "gitdir:%s/Documents/Repositorios/"]\n    path = %s/.gitconfig-nuxiba\n' "$HOME" "$HOME"
+  fi
+  for idx in $(ok_indices); do
+    printf '[includeIf "gitdir:%s/"]\n    path = %s/.gitconfig-%s\n' "${ACC_FOLDER[$idx]}" "$HOME" "${ACC_SLUG[$idx]}"
+  done
+} > "$HOME/.gitconfig"
+
+instead_block() { # <slug> <plataforma> -> bloque url.insteadOf del perfil
+  case "$2" in
+    bitbucket)
+      printf '[url "git@git-%s:"]\n    insteadOf = git@bitbucket.org:\n    insteadOf = ssh://git@ssh.bitbucket.org/\n    insteadOf = ssh://git@bitbucket.org/\n' "$1"
+      ;;
+    *)
+      printf '[url "git@git-%s:"]\n    insteadOf = git@github.com:\n' "$1"
+      ;;
+  esac
+}
 
 # Los perfiles no se pisan si ya existen: el email que el usuario ajusto a mano
-# no debe revertirse al relanzar la instalacion.
+# no debe revertirse al relanzar la instalacion. A los existentes solo se les
+# agrega el bloque de enrutamiento SSH si no lo tienen.
 if [ ! -f "$HOME/.gitconfig-personal" ]; then
-  cat > "$HOME/.gitconfig-personal" <<EOF
-[user]
-    name = $P_NAME
-    email = $P_EMAIL
-EOF
+  printf '[user]\n    name = %s\n    email = %s\n' "$P_NAME" "$P_EMAIL" > "$HOME/.gitconfig-personal"
 else
   say "~/.gitconfig-personal ya existe; se conserva"
 fi
 
-if [ "$NUXIBA_ENABLED" = "1" ]; then
-  if [ ! -f "$HOME/.gitconfig-nuxiba" ]; then
-    cat > "$HOME/.gitconfig-nuxiba" <<EOF
-[user]
-    name = $N_NAME
-    email = $N_EMAIL
-EOF
+for idx in $(ok_indices); do
+  slug="${ACC_SLUG[$idx]}"
+  pf="$HOME/.gitconfig-$slug"
+  block="$(instead_block "$slug" "${ACC_PLATFORM[$idx]}")"
+  if [ ! -f "$pf" ]; then
+    { printf '[user]\n    name = %s\n    email = %s\n\n%s' "${ACC_NAME[$idx]}" "${ACC_EMAIL[$idx]}" "$block"; } > "$pf"
+  elif ! grep -qF "git-$slug:" "$pf"; then
+    printf '\n%s' "$block" >> "$pf"
+    say "Se agrego el enrutamiento SSH a $pf"
   else
-    say "~/.gitconfig-nuxiba ya existe; se conserva"
+    say "$pf ya existe; se conserva"
   fi
-fi
+done
 
+# --- manifiesto de cuentas ----------------------------------------------------
+slugs=""
+for idx in $(ok_indices); do
+  slugs="$slugs ${ACC_SLUG[$idx]}"
+done
+slugs="${slugs# }"
+
+man="$HOME/.config/git-accounts.sh"
+{
+  printf '# generado por setup-git-identity.sh - no editar a mano\n'
+  printf 'PERSONAL_PLATFORM=%q\n' "$P_PLATFORM"
+  printf 'PERSONAL_NAME=%q\n' "$P_NAME"
+  printf 'PERSONAL_EMAIL=%q\n' "$P_EMAIL"
+  printf 'GIT_ACCOUNT_SLUGS=%q\n' "$slugs"
+  for idx in $(ok_indices); do
+    slug="${ACC_SLUG[$idx]}"
+    u="$(printf '%s' "$slug" | tr 'a-z-' 'A-Z_')"
+    printf 'ACC_%s_ESPACIO=%q\n' "$u" "${ACC_ESPACIO[$idx]}"
+    printf 'ACC_%s_PLATFORM=%q\n' "$u" "${ACC_PLATFORM[$idx]}"
+    printf 'ACC_%s_NAME=%q\n' "$u" "${ACC_NAME[$idx]}"
+    printf 'ACC_%s_EMAIL=%q\n' "$u" "${ACC_EMAIL[$idx]}"
+    printf 'ACC_%s_FOLDER=%q\n' "$u" "${ACC_FOLDER[$idx]}"
+  done
+} > "$man"
+chmod 600 "$man"
+
+# --- resumen + portapapeles ---------------------------------------------------
 gh_fp="$(ssh-keygen -lf "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null | awk '{print $2}' || echo '?')"
-say "GitHub personal: ~/.ssh/id_ed25519_personal.pub ($gh_fp)"
-if [ "$NUXIBA_ENABLED" = "1" ]; then
-  nx_fp="$(ssh-keygen -lf "$HOME/.ssh/id_ed25519_nuxiba.pub" 2>/dev/null | awk '{print $2}' || echo '?')"
-  say "Nuxiba Bitbucket: ~/.ssh/id_ed25519_nuxiba.pub ($nx_fp)"
-fi
-say "Guarda las claves publicas en GitHub/Bitbucket."
+say "Personal ($P_PLATFORM): ~/.ssh/id_ed25519_personal.pub ($gh_fp)"
+for idx in $(ok_indices); do
+  slug="${ACC_SLUG[$idx]}"
+  fp="$(ssh-keygen -lf "$HOME/.ssh/id_ed25519_$slug.pub" 2>/dev/null | awk '{print $2}' || echo '?')"
+  say "${ACC_ESPACIO[$idx]} (${ACC_PLATFORM[$idx]}): ~/.ssh/id_ed25519_$slug.pub ($fp)"
+done
+say "Guarda las claves publicas en tus plataformas."
 
-# --- copiado al portapapeles ----------------------------------------------
-# Copia la personal (la primera que se pega, en GitHub); la Nuxiba se copia
-# sola al fallar la prueba de Bitbucket en el paso 'Probar llaves SSH'.
 copied=0
-if [ -f "$HOME/.ssh/id_ed25519_personal.pub" ] && ui_copy_clip < "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null; then
-  say "Clave personal copiada al portapapeles; pegala en https://github.com/settings/ssh/new"
-  if ui_open_url "https://github.com/settings/ssh/new" 2>/dev/null; then
+if ui_copy_clip < "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null; then
+  say "Clave personal copiada al portapapeles; pegala en $(platform_url "$P_PLATFORM")"
+  if ui_open_url "$(platform_url "$P_PLATFORM")" 2>/dev/null; then
     say "Abriendo la pagina para pegarla"
   fi
   copied=1
-fi
-if [ "$NUXIBA_ENABLED" = "1" ] && [ -f "$HOME/.ssh/id_ed25519_nuxiba.pub" ]; then
-  if [ "$copied" = "1" ]; then
-    say "Clave Nuxiba: se copiara al portapapeles automaticamente si la prueba de Bitbucket falla"
-  elif ui_copy_clip < "$HOME/.ssh/id_ed25519_nuxiba.pub" 2>/dev/null; then
-    say "Clave Nuxiba copiada al portapapeles; pegala en https://bitbucket.org/account/settings/ssh-keys/"
-    if ui_open_url "https://bitbucket.org/account/settings/ssh-keys/" 2>/dev/null; then
-      say "Abriendo la pagina para pegarla"
-    fi
-    copied=1
-  fi
-fi
-if [ "$copied" = "0" ]; then
+else
   {
-    printf '=== Personal/GitHub (pegar en https://github.com/settings/ssh/new)\n'
+    printf '=== Personal/%s (pegar en %s)\n' "$P_PLATFORM" "$(platform_url "$P_PLATFORM")"
     cat "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null
-    if [ "$NUXIBA_ENABLED" = "1" ]; then
-      printf '=== Nuxiba/Bitbucket (pegar en https://bitbucket.org/account/settings/ssh-keys/)\n'
-      cat "$HOME/.ssh/id_ed25519_nuxiba.pub" 2>/dev/null
-    fi
+    for idx in $(ok_indices); do
+      slug="${ACC_SLUG[$idx]}"
+      printf '=== %s/%s (pegar en %s)\n' "${ACC_ESPACIO[$idx]}" "${ACC_PLATFORM[$idx]}" "$(platform_url "${ACC_PLATFORM[$idx]}")"
+      cat "$HOME/.ssh/id_ed25519_$slug.pub" 2>/dev/null
+    done
   } > "$HOME/claves-ssh.txt" 2>/dev/null || true
   if [ -f "$HOME/claves-ssh.txt" ]; then
-    say "Sin portapapeles: ambas claves guardadas en ~/claves-ssh.txt"
+    say "Sin portapapeles: todas las claves guardadas en ~/claves-ssh.txt"
   fi
 fi
+if [ "$copied" = "1" ] && [ "${#ACC_SLUG[@]}" -gt 0 ]; then
+  say "Las claves de los espacios se copian solas si su prueba SSH falla (paso 'Probar llaves SSH')."
+fi
 
-# --- comprobacion SSH (sin spinner dentro del panel) --------------------
+# --- comprobacion SSH (solo standalone) ---------------------------------------
 ssh_check() {
   local title="$1" target="$2"
   ui_seed_known_hosts
@@ -233,17 +421,14 @@ ssh_check() {
   say "$title falla (revisa que la clave este agregada)."
   return 1
 }
-if [ "$PANEL_MODE" = "1" ]; then
-  say "Claves listas; el paso siguiente te permitira probar la conexion."
+
+if [ "$PANEL_MODE" != "1" ] && ui_interactive && ui_ask "¿Probar la conexion SSH ahora?"; then
+  ssh_check "SSH personal ($P_PLATFORM)" "git@$(platform_host "$P_PLATFORM")" || true
+  for idx in $(ok_indices); do
+    ssh_check "SSH ${ACC_ESPACIO[$idx]}" "git@git-${ACC_SLUG[$idx]}" || true
+  done
 else
-  if ui_interactive && ui_ask "¿Probar la conexion SSH ahora?"; then
-    ssh_check "SSH GitHub" git@github.com || true
-    if [ "$NUXIBA_ENABLED" = "1" ]; then
-      ssh_check "SSH Bitbucket" git@bitbucket-nuxiba || true
-    fi
-  else
-    say "Prueba SSH omitida (pruébala despues con: ssh -T git@github.com)."
-  fi
+  say "Prueba SSH omitida (pruébala despues con: ssh -T git@$(platform_host "$P_PLATFORM"))."
 fi
 
 say "Configuracion de identidad completada."

@@ -16,7 +16,7 @@ El one-liner descarga el repo como **tarball** y no requiere `git` para empezar.
 4. `bootstrap.sh`:
    - Instala `git` y dependencias base si faltan.
    - Instala `nui` (binario propio con [bubbletea](https://github.com/charmbracelet/bubbletea)) si falta o si la version instalada difiere de `bin/VERSION`, y lo usa para banners, spinners y prompts.
-   - Configura identidad Git por defecto. Para omitirla:
+   - Configura las cuentas Git: personal obligatoria y hasta 3 espacios opcionales con carpeta propia (ver "Cuentas Git" mas abajo). Para omitirlo:
      ```bash
      SKIP_GIT_IDENTITY=1 bash bootstrap.sh
      # o
@@ -51,6 +51,35 @@ El one-liner descarga el repo como **tarball** y no requiere `git` para empezar.
 `~/.config/opencode/service.json` (fuera del repo; el push lo excluye siempre) y se
 rellena con credenciales o ajustes que no deben versionarse. No existe en la
 instalacion hasta que la crees manualmente a partir del ejemplo.
+
+## Cuentas Git (SSH + includeIf)
+`setup-git-identity.sh` configura **una cuenta personal obligatoria** y **hasta 3
+cuentas opcionales** ("espacios"):
+
+- **Personal**: clave `~/.ssh/id_ed25519_personal`, perfil `~/.gitconfig-personal`;
+  actua en **todo el sistema** (`includeIf "gitdir:$HOME/"`) salvo en las carpetas
+  de los espacios. Su plataforma (github/bitbucket) se pregunta en la instalacion.
+- **Espacios**: cada cuenta vive en una carpeta de `$HOME` cuyo nombre pide el
+  instalador (ej. `~/Nuxiba`). Tiene clave `id_ed25519_<slug>`, perfil
+  `~/.gitconfig-<slug>` y alias SSH `git-<slug>`. Dentro de la carpeta,
+  `includeIf` cambia `user.name/email` y un bloque `url.insteadOf` reescribe los
+  remotes de la plataforma al alias, de modo que los remotes se autentican con la
+  clave de esa cuenta aunque la plataforma coincida con la de la personal.
+- **Estado**: el resultado queda en `~/.config/git-accounts.sh` (manifiesto
+  generado). El paso "Probar llaves SSH" del bootstrap y `sync-dotfiles doctor`
+  lo leen; para agregar/renombrar cuentas, relanza `bootstrap.sh`.
+- **`~/.ssh/config`**: solo se regenera la seccion entre los marcadores
+  `# >>> dotfiles-managed` / `# <<< dotfiles-managed`; cualquier bloque propio
+  del usuario fuera de los marcadores se conserva.
+- **Validaciones**: el nombre del espacio se normaliza a slug (sin espacios ni
+  acentos), se rechazan duplicados, nombres que empiezan por `.` y rutas con `/`
+  (no se permiten carpetas anidadas entre espacios).
+- **Migracion**: si existia el esquema viejo (repos Nuxiba en
+  `~/Documents/Repositorios`) y hay exactamente una cuenta opcional, su contenido
+  se mueve a la carpeta del espacio y el include legado desaparece.
+- **Limitacion**: un repo personal clonado *dentro* de la carpeta de un espacio
+  usara la clave de ese espacio para la plataforma del espacio (limitacion de
+  `insteadOf`, aplicado por carpeta).
 
 ## Skills externas
 - `graphify`: https://github.com/Graphify-Labs/graphify

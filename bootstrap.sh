@@ -132,23 +132,38 @@ echo "Dependencias base listas"
 EOF
 
 if [ "$SKIP_GIT_IDENTITY" != "1" ]; then
+  ui_panel_note "Identidad: la cuenta personal es obligatoria; hasta 3 cuentas opcionales con carpeta propia en tu home"
   ui_panel_inputs <<'INPUTS'
-input p_name Nombre personal (GitHub):
-input p_email Email personal (GitHub):
-confirm nuxiba Configurar cuenta NUXIBA (Bitbucket)? n
-input n_name Nombre Nuxiba (Bitbucket):
-input n_email Email Nuxiba (Bitbucket):
+input p_platform Plataforma personal (github|bitbucket):
+default p_platform github
+input p_name Nombre personal:
+input p_email Email personal:
+input acc_count ¿Cuentas adicionales? (0-3):
+default acc_count 0
+input acc1_espacio Espacio cuenta 1 (carpeta en tu home, ej. Nuxiba; vacio ignora):
+input acc1_platform Plataforma cuenta 1 (github|bitbucket):
+default acc1_platform github
+input acc1_name Nombre cuenta 1:
+input acc1_email Email cuenta 1:
+input acc2_espacio Espacio cuenta 2 (vacio ignora):
+input acc2_platform Plataforma cuenta 2 (github|bitbucket):
+default acc2_platform github
+input acc2_name Nombre cuenta 2:
+input acc2_email Email cuenta 2:
+input acc3_espacio Espacio cuenta 3 (vacio ignora):
+input acc3_platform Plataforma cuenta 3 (github|bitbucket):
+default acc3_platform github
+input acc3_name Nombre cuenta 3:
+input acc3_email Email cuenta 3:
 INPUTS
-  ui_panel_step "Identidad Git (SSH)" --optional --estimate 30 <<'EOF'
+  ui_panel_step "Identidad Git (SSH)" --optional --estimate 45 <<'EOF'
 bash "$REPO_DIR/scripts/setup-git-identity.sh"
 EOF
 
-  ui_panel_inputs <<INPUTS
-key pub_key $HOME/.ssh/id_ed25519_personal.pub Clave publica personal (copiada al portapapeles):
-key pub_key_nuxiba $HOME/.ssh/id_ed25519_nuxiba.pub Clave publica Nuxiba (se copia al fallar la prueba):
+  ui_panel_inputs <<'INPUTS'
 confirm probar Probar conexion SSH ahora? y
 INPUTS
-  ui_panel_step "Probar llaves SSH" --optional --estimate 30 <<'EOF'
+  ui_panel_step "Probar llaves SSH" --optional --estimate 40 <<'EOF'
 if [ -z "${NUI_STEP_RESULT:-}" ] || [ ! -f "$NUI_STEP_RESULT" ]; then
   echo "##log Sin respuestas (modo no interactivo); prueba omitida"
   exit 0
@@ -160,10 +175,29 @@ if [ "${probar:-true}" != "true" ]; then
   exit 0
 fi
 
+# ui_copy_clip / ui_open_url son funciones de ui.sh y no se heredan entre
+# procesos: cargarlas aqui (antes este paso las llamaba sin tenerlas).
+# shellcheck source=lib/ui.sh
+source "$REPO_DIR/scripts/lib/ui.sh"
+
+MANIFEST="$HOME/.config/git-accounts.sh"
+if [ ! -f "$MANIFEST" ]; then
+  echo "##log Sin manifiesto de cuentas git; prueba omitida (relanza el paso de identidad)"
+  exit 0
+fi
+# shellcheck disable=SC1090
+. "$MANIFEST"
+
+platform_url() {
+  case "$1" in
+    bitbucket) printf 'https://bitbucket.org/account/settings/ssh-keys/' ;;
+    *) printf 'https://github.com/settings/ssh/new' ;;
+  esac
+}
+
 show_key() {
-  local file="${1:-$HOME/.ssh/id_ed25519_personal.pub}"
-  local url="${2:-https://github.com/settings/ssh/new}"
-  echo "##log Clave publica:"
+  local file="$1" url="$2"
+  echo "##log Clave publica ($file):"
   while IFS= read -r l; do echo "##log $l"; done < "$file" 2>/dev/null || true
   if ui_copy_clip < "$file" 2>/dev/null; then
     echo "##log Copiada al portapapeles; pegala en $url"
@@ -190,17 +224,33 @@ ssh_test() {
   echo "##log $title falla (revisa que la clave este agregada)"
   return 1
 }
-if ! ssh_test "SSH GitHub" git@github.com; then
-  show_key "$HOME/.ssh/id_ed25519_personal.pub" "https://github.com/settings/ssh/new"
-fi
-if [ -f "$HOME/.ssh/id_ed25519_nuxiba.pub" ]; then
-  if ! ssh_test "SSH Bitbucket" git@bitbucket-nuxiba; then
-    show_key "$HOME/.ssh/id_ed25519_nuxiba.pub" "https://bitbucket.org/account/settings/ssh-keys/"
+
+test_account() {
+  local title="$1" target="$2" keyfile="$3" platform="$4"
+  if [ ! -f "$keyfile" ]; then
+    echo "##log $title sin clave ($keyfile); omitido"
+    return 0
   fi
-else
-  echo "##log No hay clave Nuxiba (~/.ssh/id_ed25519_nuxiba.pub); prueba de Bitbucket omitida."
-  echo "##log Si la necesitas, configura la cuenta NUXIBA en el paso de identidad."
-fi
+  if ! ssh_test "$title" "$target"; then
+    show_key "$keyfile" "$(platform_url "$platform")"
+  fi
+}
+
+case "$PERSONAL_PLATFORM" in
+  bitbucket)
+    test_account "SSH personal (Bitbucket)" git@bitbucket.org "$HOME/.ssh/id_ed25519_personal.pub" bitbucket
+    ;;
+  *)
+    test_account "SSH personal (GitHub)" git@github.com "$HOME/.ssh/id_ed25519_personal.pub" github
+    ;;
+esac
+
+for slug in ${GIT_ACCOUNT_SLUGS:-}; do
+  u="$(printf '%s' "$slug" | tr 'a-z-' 'A-Z_')"
+  eval "esp=\"\${ACC_${u}_ESPACIO:-}\""
+  eval "pf=\"\${ACC_${u}_PLATFORM:-github}\""
+  test_account "SSH $esp" "git@git-$slug" "$HOME/.ssh/id_ed25519_$slug.pub" "$pf"
+done
 echo "##log Prueba SSH finalizada"
 EOF
 else
