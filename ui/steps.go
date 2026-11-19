@@ -300,6 +300,7 @@ type stepsModel struct {
 	canceled bool
 	finished bool
 	showHelp bool
+	showSteps bool // al terminar: alternar entre reporte y lista de pasos
 
 	width  int
 	height int
@@ -379,7 +380,7 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.formActive {
 			return m.handleFormKey(msg)
 		}
-		if m.finished {
+		if m.finished && !m.showSteps {
 			return m.handleReportKey(msg)
 		}
 		return m.handleKey(msg)
@@ -442,6 +443,11 @@ func (m stepsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.showHelp = !m.showHelp
 
+	case "tab":
+		if m.finished {
+			m.showSteps = false
+		}
+
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
@@ -466,6 +472,8 @@ func (m stepsModel) handleReportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc", "ctrl+c":
 		return m, tea.Quit
+	case "tab":
+		m.showSteps = true
 	case "up", "k":
 		if m.reportScroll > 0 {
 			m.reportScroll--
@@ -501,6 +509,8 @@ func (m stepsModel) startForm(idx int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// prepareField prepara el campo activo. Si ya tiene un valor guardado (porque
+// se volvió a él) lo restaura en lugar de usar el default.
 func (m *stepsModel) prepareField(in planInput) {
 	m.input.SetValue("")
 	m.input.Placeholder = in.Default
@@ -508,26 +518,75 @@ func (m *stepsModel) prepareField(in planInput) {
 	if in.Type == "password" {
 		m.input.EchoMode = textinput.EchoPassword
 	}
-	if in.Default != "" && (in.Type == "input" || in.Type == "password") {
-		m.input.SetValue(in.Default)
-	}
-	if in.Type == "confirm" {
-		m.confirmYes = in.Default == "true" || in.Default == "y" || in.Default == "s"
-		m.formVals[in.Name] = strconv.FormatBool(m.confirmYes)
-	}
-	if in.Type == "select" {
+	stored, has := m.formVals[in.Name]
+	switch in.Type {
+	case "input", "password":
+		val := in.Default
+		if has {
+			val = stored
+		}
+		m.input.SetValue(val)
+	case "confirm":
+		yes := in.Default == "true" || in.Default == "y" || in.Default == "s"
+		if has {
+			yes = stored == "true"
+		}
+		m.confirmYes = yes
+		m.formVals[in.Name] = strconv.FormatBool(yes)
+	case "select":
 		m.formCursor = 0
 		m.formSel = map[int]bool{}
-		if in.Default != "" {
-			for i, opt := range in.Options {
-				if opt == in.Default {
-					m.formSel[i] = true
-					m.formCursor = i
+		val := in.Default
+		if has {
+			val = stored
+		}
+		first := -1
+		for i, opt := range in.Options {
+			if strings.Contains("\n"+val+"\n", "\n"+opt+"\n") {
+				m.formSel[i] = true
+				if first < 0 {
+					first = i
 				}
 			}
 		}
+		if first >= 0 {
+			m.formCursor = first
+		}
 	}
 	m.input.Focus()
+}
+
+// storeField guarda el valor del campo activo antes de cambiar de campo, para
+// no perder lo escrito al retroceder.
+func (m *stepsModel) storeField(in planInput) {
+	switch in.Type {
+	case "input", "password":
+		m.formVals[in.Name] = m.input.Value()
+	case "confirm":
+		m.formVals[in.Name] = strconv.FormatBool(m.confirmYes)
+	case "select":
+		var vals []string
+		for i, opt := range in.Options {
+			if m.formSel[i] {
+				vals = append(vals, opt)
+			}
+		}
+		m.formVals[in.Name] = strings.Join(vals, "\n")
+	}
+}
+
+// backForm retrocede al campo visible anterior, conservando los valores.
+func (m stepsModel) backForm(idx int) (tea.Model, tea.Cmd) {
+	if m.formIdx <= 0 {
+		return m, nil
+	}
+	inputs := visibleInputs(m.plan.Steps[idx].Inputs, m.formVals)
+	m.formIdx--
+	if m.formIdx >= len(inputs) {
+		m.formIdx = len(inputs) - 1
+	}
+	m.prepareField(inputs[m.formIdx])
+	return m, nil
 }
 
 func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -542,6 +601,22 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	in := inputs[m.formIdx]
+
+	// Retroceso entre campos: shift+tab siempre; ↑ salvo en select (donde
+	// mueve la opción); ← en select. No se usa "k": es texto válido en inputs.
+	back := msg.String() == "shift+tab"
+	if !back {
+		switch in.Type {
+		case "select":
+			back = msg.String() == "left"
+		default:
+			back = msg.String() == "up"
+		}
+	}
+	if back {
+		m.storeField(in)
+		return m.backForm(idx)
+	}
 
 	switch msg.String() {
 	case "ctrl+c":
@@ -573,7 +648,7 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		if msg.String() == "enter" {
-			m.formVals[in.Name] = m.input.Value()
+			m.storeField(in)
 			return m.advanceForm(idx)
 		}
 		return m, cmd
@@ -586,14 +661,14 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.formVals[in.Name] = strconv.FormatBool(m.confirmYes)
 		case "y", "Y", "s", "S":
 			m.confirmYes = true
-			m.formVals[in.Name] = "true"
+			m.storeField(in)
 			return m.advanceForm(idx)
 		case "n", "N":
 			m.confirmYes = false
-			m.formVals[in.Name] = "false"
+			m.storeField(in)
 			return m.advanceForm(idx)
 		case "enter":
-			m.formVals[in.Name] = strconv.FormatBool(m.confirmYes)
+			m.storeField(in)
 			return m.advanceForm(idx)
 		}
 
@@ -618,13 +693,7 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.formSel = map[int]bool{m.formCursor: true}
 			}
 		case "enter":
-			var vals []string
-			for i, opt := range in.Options {
-				if m.formSel[i] {
-					vals = append(vals, opt)
-				}
-			}
-			m.formVals[in.Name] = strings.Join(vals, "\n")
+			m.storeField(in)
 			return m.advanceForm(idx)
 		}
 
@@ -984,7 +1053,7 @@ func (m stepsModel) View() string {
 	switch {
 	case m.formActive:
 		right = m.viewForm(rightW, bodyH)
-	case m.finished:
+	case m.finished && !m.showSteps:
 		right = m.viewReport(rightW, bodyH)
 	default:
 		right = m.viewPanel(rightW, bodyH)
@@ -1030,10 +1099,7 @@ func (m stepsModel) viewSteps(w, h int) string {
 	}
 	start := 0
 	if len(m.steps) > rows {
-		focus := m.cursor
-		if m.current >= 0 {
-			focus = m.current
-		}
+		focus := m.viewIndex()
 		start = focus - rows/2
 		if start < 0 {
 			start = 0
@@ -1281,9 +1347,9 @@ func (m stepsModel) viewForm(w, h int) string {
 		}
 	}
 
-	hint := "[enter] continuar · [espacio] marcar · [esc] cancelar"
+	hint := "[enter] siguiente · [shift+tab] anterior · [espacio] marcar · [esc] cancelar"
 	if ps.Optional {
-		hint = "[enter] continuar · [espacio] marcar · [esc] omitir"
+		hint = "[enter] siguiente · [shift+tab] anterior · [espacio] marcar · [esc] omitir"
 	}
 	lines = append(lines, stFaint.Render(truncate(hint, innerW)))
 
@@ -1371,32 +1437,22 @@ func (m stepsModel) viewIndex() int {
 	if m.pinned >= 0 {
 		return m.pinned
 	}
-	if m.current >= 0 {
+	// El cursor manda: se puede inspeccionar cualquier paso, incluso el que
+	// se esta ejecutando o los ya terminados, sin quedar anclado al activo.
+	if m.cursor >= 0 && m.cursor < len(m.steps) {
+		return m.cursor
+	}
+	if m.current >= 0 && m.current < len(m.steps) {
 		return m.current
 	}
-	if m.finished {
-		if i := m.firstState(stFailed); i >= 0 {
-			return i
-		}
-		return len(m.steps) - 1
-	}
-	return m.cursor
-}
-
-func (m stepsModel) firstState(s stepState) int {
-	for i, st := range m.steps {
-		if st.state == s {
-			return i
-		}
-	}
-	return -1
+	return 0
 }
 
 func (m stepsModel) viewFooter(w int) string {
 	if m.formActive {
-		hint := "[enter] continuar · [esc] cancelar"
+		hint := "[enter] siguiente · [shift+tab] anterior · [esc] cancelar"
 		if m.current >= 0 && m.plan.Steps[m.current].Optional {
-			hint = "[enter] continuar · [esc] omitir"
+			hint = "[enter] siguiente · [shift+tab] anterior · [esc] omitir"
 		}
 		return lipgloss.NewStyle().MaxWidth(w).Render(
 			" " + stFootTxt.Render(truncate(hint, w-1)))
@@ -1404,11 +1460,14 @@ func (m stepsModel) viewFooter(w int) string {
 
 	title := shorten(m.plan.Title)
 	var keys [][2]string
-	if m.finished {
+	if m.finished && !m.showSteps {
 		title = "Logs: " + m.logDir
-		keys = [][2]string{{"↑/↓", "desplazar"}, {"q", "salir"}, {"?", "ayuda"}}
+		keys = [][2]string{{"↑/↓", "desplazar"}, {"tab", "pasos"}, {"q", "salir"}, {"?", "ayuda"}}
 	} else {
-		keys = [][2]string{{"↑/↓", "navegar"}, {"enter", "detalle"}, {"q", "cancelar"}, {"?", "ayuda"}}
+		if m.finished {
+			title = "Pasos · [tab] reporte"
+		}
+		keys = [][2]string{{"↑/↓", "navegar"}, {"enter", "detalle"}, {"tab", "reporte"}, {"q", "salir"}, {"?", "ayuda"}}
 	}
 
 	parts := make([]string, 0, len(keys))
@@ -1423,6 +1482,8 @@ func (m stepsModel) viewHelp() string {
 	rows := [][2]string{
 		{"↑/↓ j/k", "navegar por la lista de pasos"},
 		{"enter", "fijar / soltar el detalle de un paso"},
+		{"shift+tab", "campo anterior en el formulario (↑, ← en select)"},
+		{"tab", "alternar reporte / lista de pasos al terminar"},
 		{"q esc", "cancelar la ejecución y salir"},
 		{"?", "cerrar esta ayuda"},
 	}

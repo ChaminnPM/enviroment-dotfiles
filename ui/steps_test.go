@@ -190,6 +190,26 @@ func typeValue(t *testing.T, m stepsModel, val string) stepsModel {
 	return next
 }
 
+func pressForm(t *testing.T, m stepsModel, key tea.KeyMsg) stepsModel {
+	t.Helper()
+	out, _ := m.handleFormKey(key)
+	next, ok := out.(stepsModel)
+	if !ok {
+		t.Fatal("handleFormKey no devolvió stepsModel")
+	}
+	return next
+}
+
+func pressModel(t *testing.T, m stepsModel, key tea.KeyMsg) stepsModel {
+	t.Helper()
+	out, _ := m.Update(key)
+	next, ok := out.(stepsModel)
+	if !ok {
+		t.Fatal("Update no devolvió stepsModel")
+	}
+	return next
+}
+
 func readResult(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(dir, "result-01.env"))
@@ -257,5 +277,72 @@ func TestFormNavigationConditional(t *testing.T) {
 	got2 := readResult(t, dir2)
 	if got2["acc1_espacio"] != "" || got2["acc1_name"] != "" {
 		t.Fatalf("subcampos deberían estar vacíos: %v", got2)
+	}
+}
+
+func TestFormBackKeepsValues(t *testing.T) {
+	dir := t.TempDir()
+	m := startFormModel(t, formPlan(), dir)
+	m = typeValue(t, m, "1")
+
+	// Escribir sin confirmar y retroceder no debe perder el valor.
+	m.input.SetValue("Nuxiba")
+	m = pressForm(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if activeField(m) != "count" {
+		t.Fatalf("tras shift+tab, campo = %q", activeField(m))
+	}
+	if m.input.Value() != "1" {
+		t.Fatalf("count restaurado = %q, quiere 1", m.input.Value())
+	}
+	m = typeValue(t, m, "1")
+	if activeField(m) != "acc1_espacio" {
+		t.Fatalf("al avanzar, campo = %q", activeField(m))
+	}
+	if m.input.Value() != "Nuxiba" {
+		t.Fatalf("espacio restaurado = %q, quiere Nuxiba", m.input.Value())
+	}
+
+	// ↑ también retrocede en campos de texto.
+	m = pressForm(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	if activeField(m) != "count" {
+		t.Fatalf("tras ↑, campo = %q", activeField(m))
+	}
+	m = typeValue(t, m, "0")
+	if m.formActive {
+		t.Fatal("con count=0 tras volver, el formulario debe terminar")
+	}
+	got := readResult(t, dir)
+	if got["count"] != "0" || got["acc1_espacio"] != "" {
+		t.Fatalf("resultado inesperado: %v", got)
+	}
+}
+
+func TestStepNavigationAfterFinish(t *testing.T) {
+	p := plan{Title: "T", Steps: []planStep{
+		{Title: "A", Cmd: "true"},
+		{Title: "B", Cmd: "true"},
+		{Title: "C", Cmd: "true"},
+	}}
+	m := newStepsModel(p, t.TempDir())
+	m.finished = true
+	m.cursor = 0
+	m.current = 2 // el paso activo no debe anclar el detalle
+
+	if m.showSteps {
+		t.Fatal("al terminar debe mostrarse el reporte")
+	}
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if !m.showSteps {
+		t.Fatal("tab debe mostrar la lista de pasos")
+	}
+
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.cursor != 1 || m.viewIndex() != 1 {
+		t.Fatalf("cursor=%d viewIndex=%d, quiere 1", m.cursor, m.viewIndex())
+	}
+
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.showSteps {
+		t.Fatal("tab debe volver al reporte")
 	}
 }
