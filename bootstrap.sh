@@ -132,30 +132,47 @@ echo "Dependencias base listas"
 EOF
 
 if [ "$SKIP_GIT_IDENTITY" != "1" ]; then
-  ui_panel_note "Identidad: la cuenta personal es obligatoria; hasta 3 cuentas opcionales con carpeta propia en tu home"
-  ui_panel_inputs <<'INPUTS'
+  ui_panel_note "Identidad: personal obligatoria; elige 0-3 cuentas adicionales y solo se pediran sus campos (vacio en 'espacio' omite esa cuenta)"
+
+  # Los campos de cuenta se generan con un bucle para no repetir 12 bloques
+  # casi identicos. showif <campo> <field> <op> [value] controla la visibilidad.
+  _git_account_inputs() {
+    local n note
+    for n in 1 2 3; do
+      case "$n" in
+        1) note="(carpeta en tu home, ej. Nuxiba; vacio ignora)" ;;
+        *) note="(vacio ignora)" ;;
+      esac
+      printf 'input acc%s_espacio Espacio cuenta %s %s:\n' "$n" "$n" "$note"
+      printf 'showif acc%s_espacio acc_count gte %s\n' "$n" "$n"
+      printf 'input acc%s_platform Plataforma cuenta %s (github|bitbucket):\n' "$n" "$n"
+      printf 'default acc%s_platform github\n' "$n"
+      printf 'showif acc%s_platform acc_count gte %s\n' "$n" "$n"
+      printf 'showif acc%s_platform acc%s_espacio nonempty\n' "$n" "$n"
+      printf 'input acc%s_name Nombre cuenta %s:\n' "$n" "$n"
+      printf 'showif acc%s_name acc_count gte %s\n' "$n" "$n"
+      printf 'showif acc%s_name acc%s_espacio nonempty\n' "$n" "$n"
+      printf 'input acc%s_email Email cuenta %s:\n' "$n" "$n"
+      printf 'showif acc%s_email acc_count gte %s\n' "$n" "$n"
+      printf 'showif acc%s_email acc%s_espacio nonempty\n' "$n" "$n"
+    done
+  }
+
+  ui_panel_inputs < <({
+    cat <<'INPUTS'
 input p_platform Plataforma personal (github|bitbucket):
 default p_platform github
 input p_name Nombre personal:
 input p_email Email personal:
-input acc_count ¿Cuentas adicionales? (0-3):
+select acc_count ¿Cuentas adicionales? (0-3):
 default acc_count 0
-input acc1_espacio Espacio cuenta 1 (carpeta en tu home, ej. Nuxiba; vacio ignora):
-input acc1_platform Plataforma cuenta 1 (github|bitbucket):
-default acc1_platform github
-input acc1_name Nombre cuenta 1:
-input acc1_email Email cuenta 1:
-input acc2_espacio Espacio cuenta 2 (vacio ignora):
-input acc2_platform Plataforma cuenta 2 (github|bitbucket):
-default acc2_platform github
-input acc2_name Nombre cuenta 2:
-input acc2_email Email cuenta 2:
-input acc3_espacio Espacio cuenta 3 (vacio ignora):
-input acc3_platform Plataforma cuenta 3 (github|bitbucket):
-default acc3_platform github
-input acc3_name Nombre cuenta 3:
-input acc3_email Email cuenta 3:
+option acc_count 0
+option acc_count 1
+option acc_count 2
+option acc_count 3
 INPUTS
+    _git_account_inputs
+  })
   ui_panel_step "Identidad Git (SSH)" --optional --estimate 45 <<'EOF'
 bash "$REPO_DIR/scripts/setup-git-identity.sh"
 EOF

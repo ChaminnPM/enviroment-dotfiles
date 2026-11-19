@@ -46,13 +46,22 @@ type planStep struct {
 // planInput es un campo del formulario que el panel pide antes de ejecutar
 // el paso. Los valores se guardan en $NUI_STATE_DIR/result-<N>.env.
 type planInput struct {
-	Type    string   `json:"type"` // input | password | confirm | select | key
-	Name    string   `json:"name"`
-	Prompt  string   `json:"prompt"`
-	Default string   `json:"default"`
-	Options []string `json:"options"`
-	Multi   bool     `json:"multi"`
-	Path    string   `json:"path,omitempty"` // para type=key
+	Type    string           `json:"type"` // input | password | confirm | select | key
+	Name    string           `json:"name"`
+	Prompt  string           `json:"prompt"`
+	Default string           `json:"default"`
+	Options []string         `json:"options"`
+	Multi   bool             `json:"multi"`
+	Path    string           `json:"path,omitempty"`   // para type=key
+	ShowIf  []inputCondition `json:"show_if,omitempty"` // todas las condiciones deben cumplirse
+}
+
+// inputCondition controla la visibilidad de un campo según el valor de otro
+// campo ya respondido en el mismo formulario.
+type inputCondition struct {
+	Field string `json:"field"`
+	Op    string `json:"op"`
+	Value string `json:"value,omitempty"`
 }
 
 type plan struct {
@@ -88,7 +97,7 @@ func loadPlan(path string) (plan, error) {
 		if p.Steps[i].Title == "" {
 			p.Steps[i].Title = fmt.Sprintf("Paso %d", i+1)
 		}
-		for _, in := range p.Steps[i].Inputs {
+		for j, in := range p.Steps[i].Inputs {
 			switch in.Type {
 			case "input", "password", "confirm":
 				if strings.TrimSpace(in.Name) == "" {
@@ -105,12 +114,90 @@ func loadPlan(path string) (plan, error) {
 			default:
 				return plan{}, fmt.Errorf("paso %d: tipo de input desconocido: %s", i+1, in.Type)
 			}
+			for k := range in.ShowIf {
+				c := &in.ShowIf[k]
+				c.Field = strings.TrimSpace(c.Field)
+				c.Op = strings.TrimSpace(c.Op)
+				switch c.Op {
+				case "eq", "ne", "gt", "gte", "lt", "lte", "nonempty", "empty":
+				default:
+					return plan{}, fmt.Errorf("paso %d: operador show_if desconocido: %s", i+1, c.Op)
+				}
+				if c.Field == "" {
+					return plan{}, fmt.Errorf("paso %d: show_if sin campo en %s", i+1, in.Name)
+				}
+				prev := false
+				for x := 0; x < j; x++ {
+					if p.Steps[i].Inputs[x].Name == c.Field {
+						prev = true
+						break
+					}
+				}
+				if !prev {
+					return plan{}, fmt.Errorf("paso %d: show_if de %s referencia campo no previo: %s", i+1, in.Name, c.Field)
+				}
+			}
 		}
 	}
 	if p.Title == "" {
 		p.Title = "INSTALACIÓN"
 	}
 	return p, nil
+}
+
+// evalCondition evalúa una condición show_if contra los valores ya capturados.
+// Las comparaciones numéricas devuelven false si alguno no es un entero.
+func evalCondition(c inputCondition, vals map[string]string) bool {
+	v := strings.TrimSpace(vals[c.Field])
+	switch c.Op {
+	case "eq":
+		return v == c.Value
+	case "ne":
+		return v != c.Value
+	case "nonempty":
+		return v != ""
+	case "empty":
+		return v == ""
+	case "gt", "gte", "lt", "lte":
+		a, ea := strconv.Atoi(v)
+		b, eb := strconv.Atoi(strings.TrimSpace(c.Value))
+		if ea != nil || eb != nil {
+			return false
+		}
+		switch c.Op {
+		case "gt":
+			return a > b
+		case "gte":
+			return a >= b
+		case "lt":
+			return a < b
+		default:
+			return a <= b
+		}
+	}
+	return false
+}
+
+// inputVisible indica si un campo cumple todas sus condiciones show_if.
+func inputVisible(in planInput, vals map[string]string) bool {
+	for _, c := range in.ShowIf {
+		if !evalCondition(c, vals) {
+			return false
+		}
+	}
+	return true
+}
+
+// visibleInputs devuelve los campos cuyas condiciones show_if se cumplen
+// con los valores respondidos hasta ahora.
+func visibleInputs(inputs []planInput, vals map[string]string) []planInput {
+	out := make([]planInput, 0, len(inputs))
+	for _, in := range inputs {
+		if inputVisible(in, vals) {
+			out = append(out, in)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------- estado
@@ -406,7 +493,11 @@ func (m stepsModel) startForm(idx int) (tea.Model, tea.Cmd) {
 			m.formVals[in.Name] = strconv.FormatBool(def)
 		}
 	}
-	m.prepareField(m.plan.Steps[idx].Inputs[0])
+	vis := visibleInputs(m.plan.Steps[idx].Inputs, m.formVals)
+	if len(vis) == 0 {
+		return m.finishForm(idx)
+	}
+	m.prepareField(vis[0])
 	return m, nil
 }
 
@@ -441,11 +532,16 @@ func (m *stepsModel) prepareField(in planInput) {
 
 func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	idx := m.current
-	if idx < 0 || idx >= len(m.plan.Steps) || m.formIdx >= len(m.plan.Steps[idx].Inputs) {
+	if idx < 0 || idx >= len(m.plan.Steps) {
 		m.formActive = false
 		return m, nil
 	}
-	in := m.plan.Steps[idx].Inputs[m.formIdx]
+	inputs := visibleInputs(m.plan.Steps[idx].Inputs, m.formVals)
+	if m.formIdx >= len(inputs) {
+		m.formActive = false
+		return m, nil
+	}
+	in := inputs[m.formIdx]
 
 	switch msg.String() {
 	case "ctrl+c":
@@ -541,7 +637,7 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m stepsModel) advanceForm(idx int) (tea.Model, tea.Cmd) {
-	inputs := m.plan.Steps[idx].Inputs
+	inputs := visibleInputs(m.plan.Steps[idx].Inputs, m.formVals)
 	if m.formIdx+1 >= len(inputs) {
 		return m.finishForm(idx)
 	}
@@ -591,9 +687,18 @@ func (m stepsModel) saveResults(idx int) {
 		return
 	}
 	_ = os.MkdirAll(m.stateDir, 0o755)
+	vis := visibleInputs(m.plan.Steps[idx].Inputs, m.formVals)
+	shown := make(map[string]bool, len(vis))
+	for _, in := range vis {
+		shown[in.Name] = true
+	}
 	var b strings.Builder
 	for _, in := range m.plan.Steps[idx].Inputs {
-		b.WriteString(in.Name + "=" + shellQuote(m.formVals[in.Name]) + "\n")
+		val := m.formVals[in.Name]
+		if !shown[in.Name] {
+			val = "" // campo oculto: no debe heredar valores del entorno
+		}
+		b.WriteString(in.Name + "=" + shellQuote(val) + "\n")
 	}
 	_ = os.WriteFile(filepath.Join(m.stateDir, fmt.Sprintf("result-%02d.env", idx+1)),
 		[]byte(b.String()), 0o600)
@@ -1056,7 +1161,8 @@ func (m stepsModel) viewForm(w, h int) string {
 		return ""
 	}
 	ps := m.plan.Steps[idx]
-	if m.formIdx >= len(ps.Inputs) {
+	inputs := visibleInputs(ps.Inputs, m.formVals)
+	if m.formIdx >= len(inputs) {
 		return ""
 	}
 
@@ -1064,7 +1170,7 @@ func (m stepsModel) viewForm(w, h int) string {
 		stHeader.Render(truncate(ps.Title+" · formulario", innerW)),
 		"",
 	}
-	for i, in := range ps.Inputs {
+	for i, in := range inputs {
 		active := i == m.formIdx
 		prefix := "  "
 		if active {
@@ -1604,8 +1710,15 @@ func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader
 		return
 	}
 	_ = os.MkdirAll(stateDir, 0o755)
+	vals := map[string]string{}
 	var b strings.Builder
 	for _, in := range inputs {
+		if !inputVisible(in, vals) {
+			// Campo oculto: se guarda vacío para no heredar valores del entorno.
+			vals[in.Name] = ""
+			b.WriteString(in.Name + "=" + shellQuote("") + "\n")
+			continue
+		}
 		val := in.Default
 		switch in.Type {
 		case "input", "password":
@@ -1676,6 +1789,7 @@ func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader
 			}
 			val = strings.Join(picked, "\n")
 		}
+		vals[in.Name] = val
 		b.WriteString(in.Name + "=" + shellQuote(val) + "\n")
 	}
 	_ = os.WriteFile(filepath.Join(stateDir, fmt.Sprintf("result-%02d.env", idx+1)),

@@ -512,7 +512,8 @@ ui_panel_inputs() { PANEL_INPUTS="$(cat)"; }
 # \x1f): type, nombre, prompt, default, multi, opciones.
 _ui_panel_inputs_fields() {
   local line kind rest name prompt value last
-  local -a names=() types=() prompts=() defaults=() multis=() options=()
+  local found cfield after cop cval
+  local -a names=() types=() prompts=() defaults=() multis=() options=() conds=()
   local i
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line#"${line%%[![:space:]]*}"}"
@@ -533,6 +534,7 @@ _ui_panel_inputs_fields() {
         defaults+=("")
         multis+=("0")
         options+=("")
+        conds+=("")
         ;;
       key)
         # key <nombre> <ruta> <prompt...>: muestra el archivo en el panel.
@@ -548,6 +550,7 @@ _ui_panel_inputs_fields() {
         defaults+=("")
         multis+=("0")
         options+=("$path")
+        conds+=("")
         ;;
       option)
         name="${rest%% *}"
@@ -572,6 +575,34 @@ _ui_panel_inputs_fields() {
             defaults[$i]="$value"
           fi
         done
+        ;;
+      showif)
+        # showif <campo> <field> <op> [value]: condicion de visibilidad.
+        # Varias lineas sobre el mismo campo se combinan con AND.
+        name="${rest%% *}"
+        after="${rest#"$name"}"
+        after="${after#"${after%%[![:space:]]*}"}"
+        cfield="${after%% *}"
+        after="${after#"$cfield"}"
+        after="${after#"${after%%[![:space:]]*}"}"
+        cop="${after%% *}"
+        cval="${after#"$cop"}"
+        cval="${cval#"${cval%%[![:space:]]*}"}"
+        case "$cop" in
+          eq|ne|gt|gte|lt|lte|nonempty|empty) ;;
+          *) return 1 ;;
+        esac
+        found=0
+        for i in "${!names[@]}"; do
+          if [ "${names[$i]}" = "$name" ]; then
+            found=1
+            if [ -n "${conds[$i]}" ]; then
+              conds[$i]="${conds[$i]}"$'\x1d'
+            fi
+            conds[$i]="${conds[$i]}${cfield}"$'\x1c'"${cop}"$'\x1c'"${cval}"
+          fi
+        done
+        [ "$found" = "1" ] || return 1
         ;;
     esac
   done
@@ -598,8 +629,8 @@ _ui_panel_inputs_fields() {
         fi
         ;;
     esac
-    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' \
-      "${types[$i]}" "${names[$i]}" "${prompts[$i]}" "${defaults[$i]}" "${multis[$i]}" "${options[$i]}"
+    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' \
+      "${types[$i]}" "${names[$i]}" "${prompts[$i]}" "${defaults[$i]}" "${multis[$i]}" "${options[$i]}" "${conds[$i]}"
   done
 }
 
@@ -668,11 +699,49 @@ _ui_panel_prompt_inputs() {
   printf '%s' "$b64" | base64 -d > "$fields"
   local -a field_lines=()
   mapfile -t field_lines < "$fields"
-  local line type name prompt default multi options val sel n i idxopt yesno
-  local -a opts=()
+  local line type name prompt default multi options sf val sel n i idxopt yesno
+  local shown cond cf cop cv cur want iopt
+  local -a opts=() condlist=()
+  declare -A answers=()
   for line in "${field_lines[@]}"; do
-    IFS=$'\x1f' read -r type name prompt default multi options <<< "$line"
+    IFS=$'\x1f' read -r type name prompt default multi options sf <<< "$line"
     [ -n "$type" ] || continue
+
+    # Visibilidad condicional (show_if): todas las condiciones deben cumplirse.
+    shown=1
+    if [ -n "$sf" ]; then
+      IFS=$'\x1d' read -ra condlist <<< "$sf"
+      for cond in "${condlist[@]}"; do
+        [ -n "$cond" ] || continue
+        IFS=$'\x1c' read -r cf cop cv <<< "$cond"
+        cur="${answers[$cf]:-}"
+        case "$cop" in
+          eq)       [ "$cur" = "$cv" ]  || shown=0 ;;
+          ne)       [ "$cur" != "$cv" ] || shown=0 ;;
+          nonempty) [ -n "$cur" ]       || shown=0 ;;
+          empty)    [ -z "$cur" ]       || shown=0 ;;
+          gt|gte|lt|lte)
+            case "$cur" in ''|*[!0-9]*) shown=0 ;; esac
+            case "$cv"  in ''|*[!0-9]*) shown=0 ;; esac
+            if [ "$shown" = "1" ]; then
+              case "$cop" in
+                gt)  [ "$cur" -gt "$cv" ] || shown=0 ;;
+                gte) [ "$cur" -ge "$cv" ] || shown=0 ;;
+                lt)  [ "$cur" -lt "$cv" ] || shown=0 ;;
+                lte) [ "$cur" -le "$cv" ] || shown=0 ;;
+              esac
+            fi
+            ;;
+        esac
+        [ "$shown" = "1" ] || break
+      done
+    fi
+    if [ "$shown" = "0" ]; then
+      answers["$name"]=""
+      printf '%s=%q\n' "$name" "" >> "$out"
+      continue
+    fi
+
     val="$default"
     case "$type" in
       input)
@@ -713,8 +782,20 @@ ${opts[$idxopt]}"; else val="${opts[$idxopt]}"; fi
           fi
           [ "$multi" = "1" ] || break
         done
+        if [ -z "$val" ] && [ -n "$default" ]; then
+          for want in $default; do
+            for iopt in "${!opts[@]}"; do
+              if [ "${opts[$iopt]}" = "$want" ]; then
+                if [ -n "$val" ]; then val="$val
+${opts[$iopt]}"; else val="${opts[$iopt]}"; fi
+                break
+              fi
+            done
+          done
+        fi
         ;;
     esac
+    answers["$name"]="$val"
     printf '%s=%q\n' "$name" "$val" >> "$out"
   done
   rm -f "$fields"
@@ -785,9 +866,9 @@ _ui_panel_plan_json() {
   local first_step=1
   local entry b64t opt intr est path b64in t
   local nfirst=1 n
-  local fields line ty na pr de mu op o optval
-  local ifirst ofirst
-  local -a opts=()
+  local fields line ty na pr de mu op sf optval
+  local ifirst ofirst cfirst cf cop cv cond
+  local -a opts=() condlist=()
 
   {
     printf '{"title":"%s","notes":[' "$(json_escape "$title")"
@@ -815,7 +896,7 @@ _ui_panel_plan_json() {
         fields="$(mktemp "${TMPDIR:-/tmp}/nui-fields.XXXXXX")"
         printf '%s' "$b64in" | base64 -d > "$fields"
         ifirst=1
-        while IFS=$'\x1f' read -r ty na pr de mu op; do
+        while IFS=$'\x1f' read -r ty na pr de mu op sf; do
           [ -n "$ty" ] || continue
           [ "$ifirst" = "0" ] && printf ','
           ifirst=0
@@ -834,6 +915,21 @@ _ui_panel_plan_json() {
               [ "$ofirst" = "0" ] && printf ','
               ofirst=0
               printf '"%s"' "$(json_escape "$optval")"
+            done
+            printf ']'
+          fi
+          if [ -n "$sf" ]; then
+            printf ',"show_if":['
+            cfirst=1
+            IFS=$'\x1d' read -ra condlist <<< "$sf"
+            for cond in "${condlist[@]}"; do
+              [ -n "$cond" ] || continue
+              [ "$cfirst" = "0" ] && printf ','
+              cfirst=0
+              IFS=$'\x1c' read -r cf cop cv <<< "$cond"
+              printf '{"field":"%s","op":"%s"' "$(json_escape "$cf")" "$(json_escape "$cop")"
+              [ -z "$cv" ] || printf ',"value":"%s"' "$(json_escape "$cv")"
+              printf '}'
             done
             printf ']'
           fi
