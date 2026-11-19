@@ -301,6 +301,7 @@ type stepsModel struct {
 	finished bool
 	showHelp bool
 	showSteps bool // al terminar: alternar entre reporte y lista de pasos
+	focusSteps bool // con formulario abierto: foco en la lista de pasos
 
 	width  int
 	height int
@@ -377,7 +378,24 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// ctrl+↑/↓ navega los pasos incluso desde el formulario.
 		if m.formActive {
+			switch msg.String() {
+			case "ctrl+up":
+				m.focusSteps = true
+				if m.cursor > 0 {
+					m.cursor--
+				}
+				return m, nil
+			case "ctrl+down":
+				m.focusSteps = true
+				if m.cursor < len(m.steps)-1 {
+					m.cursor++
+				}
+				return m, nil
+			}
+		}
+		if m.formActive && !m.focusSteps {
 			return m.handleFormKey(msg)
 		}
 		if m.finished && !m.showSteps {
@@ -426,7 +444,13 @@ func (m *stepsModel) markCanceled() {
 
 func (m stepsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q", "esc", "ctrl+c":
+	case "esc":
+		if m.formActive && m.focusSteps {
+			m.focusSteps = false
+			return m, nil
+		}
+		fallthrough
+	case "q", "ctrl+c":
 		if m.current >= 0 && m.steps[m.current].state == stRunning {
 			m.run.kill()
 		}
@@ -444,7 +468,9 @@ func (m stepsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 
 	case "tab":
-		if m.finished {
+		if m.formActive && m.focusSteps {
+			m.focusSteps = false
+		} else if m.finished {
 			m.showSteps = false
 		}
 
@@ -492,6 +518,7 @@ func (m stepsModel) handleReportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m stepsModel) startForm(idx int) (tea.Model, tea.Cmd) {
 	m.formActive = true
+	m.focusSteps = false
 	m.formIdx = 0
 	m.formVals = map[string]string{}
 	m.formSel = map[int]bool{}
@@ -602,6 +629,11 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	in := inputs[m.formIdx]
 
+	if msg.String() == "tab" {
+		m.focusSteps = true
+		return m, nil
+	}
+
 	// Retroceso entre campos: shift+tab siempre; ↑ salvo en select (donde
 	// mueve la opción); ← en select. No se usa "k": es texto válido en inputs.
 	back := msg.String() == "shift+tab"
@@ -655,7 +687,7 @@ func (m stepsModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "confirm":
 		switch msg.String() {
-		case "left", "right", "h", "l", "tab", " ", "x":
+		case "left", "right", "h", "l", " ", "x":
 			cur := m.formVals[in.Name] == "true"
 			m.confirmYes = !cur
 			m.formVals[in.Name] = strconv.FormatBool(m.confirmYes)
@@ -1015,6 +1047,9 @@ var (
 
 	stPanelBox = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
 			BorderForeground(colDim).Padding(0, 1)
+	stPanelBoxFocus = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+			BorderForeground(colAccent).Padding(0, 1)
+	stPinMark = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	stBracket = lipgloss.NewStyle().Foreground(colDim)
 	stPercent = lipgloss.NewStyle().Foreground(colDim)
 	stCounter = lipgloss.NewStyle().Foreground(colDim)
@@ -1032,6 +1067,15 @@ var (
 	stHelpTitle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	stHelpKey   = lipgloss.NewStyle().Foreground(colWhite).Bold(true)
 )
+
+// rightPanelBox resalta el panel derecho salvo cuando el foco está en la
+// lista de pasos mientras hay un formulario abierto.
+func (m stepsModel) rightPanelBox() lipgloss.Style {
+	if m.formActive && m.focusSteps {
+		return stPanelBox
+	}
+	return stPanelBoxFocus
+}
 
 func (m stepsModel) View() string {
 	if m.width == 0 || m.height == 0 {
@@ -1051,7 +1095,7 @@ func (m stepsModel) View() string {
 
 	var right string
 	switch {
-	case m.formActive:
+	case m.formActive && !m.focusSteps:
 		right = m.viewForm(rightW, bodyH)
 	case m.finished && !m.showSteps:
 		right = m.viewReport(rightW, bodyH)
@@ -1090,7 +1134,11 @@ func normalizeView(s string, w, h int) string {
 
 func (m stepsModel) viewSteps(w, h int) string {
 	lines := make([]string, 0, h)
-	lines = append(lines, stHeader.Render(truncate(shorten(m.plan.Title), w)))
+	title := shorten(m.plan.Title)
+	if m.formActive && m.focusSteps {
+		title = "▸ " + title
+	}
+	lines = append(lines, stHeader.Render(truncate(title, w)))
 	lines = append(lines, "")
 
 	rows := h - 2
@@ -1116,7 +1164,7 @@ func (m stepsModel) viewSteps(w, h int) string {
 	for i := start; i < end; i++ {
 		s := m.steps[i]
 		cursor := " "
-		if i == m.cursor && !m.finished {
+		if i == m.cursor && (!m.finished || m.showSteps) {
 			cursor = stCursor.Render(">")
 		}
 
@@ -1137,8 +1185,12 @@ func (m stepsModel) viewSteps(w, h int) string {
 			marker, titleStyle = stPendMark.Render("[ ]"), stTitlePend
 		}
 
-		label := truncate(fmt.Sprintf("%d. %s", i+1, s.title), w-6)
-		lines = append(lines, cursor+" "+marker+" "+titleStyle.Render(label))
+		pin := "  "
+		if i == m.pinned {
+			pin = stPinMark.Render("◆ ")
+		}
+		label := truncate(fmt.Sprintf("%d. %s", i+1, s.title), w-8)
+		lines = append(lines, cursor+" "+marker+" "+pin+titleStyle.Render(label))
 	}
 
 	if len(lines) > h {
@@ -1214,7 +1266,7 @@ func (m stepsModel) viewPanel(w, h int) string {
 	}
 
 	content := strings.Join(append([]string{header, bar, counter, divider}, logs...), "\n")
-	return stPanelBox.Width(w - 2).Height(h - 2).Render(content)
+	return m.rightPanelBox().Width(w - 2).Height(h - 2).Render(content)
 }
 
 // ------------------------------------------------------------ formulario
@@ -1232,11 +1284,17 @@ func (m stepsModel) viewForm(w, h int) string {
 		return ""
 	}
 
-	lines := []string{
-		stHeader.Render(truncate(ps.Title+" · formulario", innerW)),
+	head := []string{
+		stHeader.Render(truncate(fmt.Sprintf("%s · formulario · campo %d de %d",
+			ps.Title, m.formIdx+1, len(inputs)), innerW)),
 		"",
 	}
+	lines := make([]string, 0, len(inputs)*3)
+	activeLine := 0
 	for i, in := range inputs {
+		if i == m.formIdx {
+			activeLine = len(lines)
+		}
 		active := i == m.formIdx
 		prefix := "  "
 		if active {
@@ -1285,6 +1343,26 @@ func (m stepsModel) viewForm(w, h int) string {
 			}
 
 		case "select":
+			// Un select inactivo debe mostrar su propio valor guardado, no el
+			// formSel/formCursor del campo activo.
+			sel, cursorOpt := m.formSel, m.formCursor
+			if !active {
+				val := m.formVals[in.Name]
+				sel = map[int]bool{}
+				cursorOpt = 0
+				first := -1
+				for i, opt := range in.Options {
+					if strings.Contains("\n"+val+"\n", "\n"+opt+"\n") {
+						sel[i] = true
+						if first < 0 {
+							first = i
+						}
+					}
+				}
+				if first >= 0 {
+					cursorOpt = first
+				}
+			}
 			maxOpts := innerH - 10
 			if maxOpts < 5 {
 				maxOpts = 5
@@ -1292,8 +1370,8 @@ func (m stepsModel) viewForm(w, h int) string {
 			start, end := 0, len(in.Options)
 			if len(in.Options) > maxOpts {
 				start = 0
-				if m.formCursor >= maxOpts {
-					start = m.formCursor - maxOpts + 1
+				if cursorOpt >= maxOpts {
+					start = cursorOpt - maxOpts + 1
 				}
 				end = start + maxOpts
 				if end > len(in.Options) {
@@ -1303,11 +1381,11 @@ func (m stepsModel) viewForm(w, h int) string {
 			}
 			for oi := start; oi < end; oi++ {
 				mark := stPendMark.Render("[ ]")
-				if m.formSel[oi] {
+				if sel[oi] {
 					mark = stDoneMark.Render("[x]")
 				}
 				cur := "  "
-				if active && oi == m.formCursor {
+				if active && oi == cursorOpt {
 					cur = stCursor.Render("> ")
 				}
 				lines = append(lines, prefix+"  "+cur+mark+" "+
@@ -1347,17 +1425,30 @@ func (m stepsModel) viewForm(w, h int) string {
 		}
 	}
 
-	hint := "[enter] siguiente · [shift+tab] anterior · [espacio] marcar · [esc] cancelar"
+	hint := "[enter] siguiente · [shift+tab] anterior · [tab] pasos · [esc] cancelar"
 	if ps.Optional {
-		hint = "[enter] siguiente · [shift+tab] anterior · [espacio] marcar · [esc] omitir"
+		hint = "[enter] siguiente · [shift+tab] anterior · [tab] pasos · [esc] omitir"
 	}
-	lines = append(lines, stFaint.Render(truncate(hint, innerW)))
 
+	// Ventana desplazable: mantiene visible el campo activo aunque haya más
+	// campos de los que caben (por ejemplo con 2 o 3 cuentas adicionales).
 	maxLines := maxInt(1, innerH-2)
+	bodyMax := maxInt(1, maxLines-3) // cabecera (2) + pista (1)
+	if len(lines) > bodyMax {
+		start := activeLine - bodyMax/2
+		if start < 0 {
+			start = 0
+		}
+		if start+bodyMax > len(lines) {
+			start = len(lines) - bodyMax
+		}
+		lines = lines[start : start+bodyMax]
+	}
+	lines = append(append(head, lines...), stFaint.Render(truncate(hint, innerW)))
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
 	}
-	return stPanelBox.Width(w - 2).Height(h - 2).Render(strings.Join(lines, "\n"))
+	return m.rightPanelBox().Width(w - 2).Height(h - 2).Render(strings.Join(lines, "\n"))
 }
 
 // ------------------------------------------------------------ reporte
@@ -1411,7 +1502,7 @@ func (m stepsModel) viewReport(w, h int) string {
 			lines = lines[:maxLines]
 		}
 	}
-	return stPanelBox.Width(w - 2).Height(h - 2).Render(strings.Join(lines, "\n"))
+	return m.rightPanelBox().Width(w - 2).Height(h - 2).Render(strings.Join(lines, "\n"))
 }
 
 func (m stepsModel) panelTitle(cur runStep) (string, lipgloss.Style) {
@@ -1449,10 +1540,19 @@ func (m stepsModel) viewIndex() int {
 }
 
 func (m stepsModel) viewFooter(w int) string {
+	if m.formActive && m.focusSteps {
+		keys := [][2]string{{"↑/↓", "navegar pasos"}, {"enter", "detalle"}, {"tab/esc", "volver al formulario"}, {"q", "salir"}}
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, stFootKey.Render("["+k[0]+"]")+" "+stFootTxt.Render(k[1]))
+		}
+		line := stFootTxt.Render("PASOS") + "  " + strings.Join(parts, stFootSep.Render(" • "))
+		return lipgloss.NewStyle().MaxWidth(w).Render(" " + line)
+	}
 	if m.formActive {
-		hint := "[enter] siguiente · [shift+tab] anterior · [esc] cancelar"
+		hint := "[enter] siguiente · [shift+tab] anterior · [tab] pasos · [esc] cancelar"
 		if m.current >= 0 && m.plan.Steps[m.current].Optional {
-			hint = "[enter] siguiente · [shift+tab] anterior · [esc] omitir"
+			hint = "[enter] siguiente · [shift+tab] anterior · [tab] pasos · [esc] omitir"
 		}
 		return lipgloss.NewStyle().MaxWidth(w).Render(
 			" " + stFootTxt.Render(truncate(hint, w-1)))
@@ -1483,7 +1583,8 @@ func (m stepsModel) viewHelp() string {
 		{"↑/↓ j/k", "navegar por la lista de pasos"},
 		{"enter", "fijar / soltar el detalle de un paso"},
 		{"shift+tab", "campo anterior en el formulario (↑, ← en select)"},
-		{"tab", "alternar reporte / lista de pasos al terminar"},
+		{"tab", "pasos desde el formulario / alternar reporte al terminar"},
+		{"ctrl+↑/↓", "navegar pasos directamente desde el formulario"},
 		{"q esc", "cancelar la ejecución y salir"},
 		{"?", "cerrar esta ayuda"},
 	}

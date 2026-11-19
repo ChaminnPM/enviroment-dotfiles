@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -314,6 +315,104 @@ func TestFormBackKeepsValues(t *testing.T) {
 	got := readResult(t, dir)
 	if got["count"] != "0" || got["acc1_espacio"] != "" {
 		t.Fatalf("resultado inesperado: %v", got)
+	}
+}
+
+func multiFormPlan() plan {
+	p := formPlan()
+	p.Steps = append(p.Steps,
+		planStep{Title: "Paso 2", Cmd: "true"},
+		planStep{Title: "Paso 3", Cmd: "true"},
+	)
+	return p
+}
+
+func TestFormToStepsFocus(t *testing.T) {
+	dir := t.TempDir()
+	m := startFormModel(t, multiFormPlan(), dir)
+	m.input.SetValue("valor")
+	if m.focusSteps {
+		t.Fatal("el formulario debe empezar con el foco en los campos")
+	}
+
+	m = pressForm(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if !m.focusSteps {
+		t.Fatal("tab debe pasar el foco a la lista de pasos")
+	}
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.cursor != 1 || m.viewIndex() != 1 {
+		t.Fatalf("cursor=%d viewIndex=%d, quiere 1", m.cursor, m.viewIndex())
+	}
+
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.focusSteps || m.canceled || !m.formActive {
+		t.Fatalf("esc debe volver al formulario sin cancelar: %+v", m)
+	}
+	if m.input.Value() != "valor" {
+		t.Fatalf("valor perdido al volver: %q", m.input.Value())
+	}
+
+	m = pressForm(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if !m.focusSteps {
+		t.Fatal("tab debe volver a enfocar pasos")
+	}
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.focusSteps {
+		t.Fatal("tab debe devolver el foco al formulario")
+	}
+}
+
+func TestCtrlArrowsFromForm(t *testing.T) {
+	m := startFormModel(t, multiFormPlan(), t.TempDir())
+	m.current = 2
+	m.cursor = 2
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlUp})
+	if !m.focusSteps || m.cursor != 1 {
+		t.Fatalf("ctrl+up: focusSteps=%v cursor=%d, quiere true/1", m.focusSteps, m.cursor)
+	}
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlDown})
+	if m.cursor != 2 {
+		t.Fatalf("ctrl+down: cursor=%d, quiere 2", m.cursor)
+	}
+}
+
+func viewTestModel(t *testing.T, p plan, h int) stepsModel {
+	t.Helper()
+	m := newStepsModel(p, t.TempDir())
+	m.width, m.height = 110, h
+	m.stateDir = t.TempDir()
+	out, _ := m.startForm(0)
+	m = out.(stepsModel)
+	return m
+}
+
+func TestViewFormInactiveSelect(t *testing.T) {
+	p := plan{Title: "T", Steps: []planStep{{Title: "S", Cmd: "true", Inputs: []planInput{
+		{Type: "input", Name: "name", Prompt: "Nombre"},
+		{Type: "select", Name: "acc_count", Prompt: "Cuentas", Default: "0", Options: []string{"0", "1", "2", "3"}},
+	}}}}
+	m := viewTestModel(t, p, 24)
+	m.formVals["acc_count"] = "0"
+
+	plain := ansiRe.ReplaceAllString(m.View(), "")
+	if !strings.Contains(plain, "[x] 0") {
+		t.Fatalf("select inactivo sin marca [x] 0:\n%s", plain)
+	}
+}
+
+func TestViewFormScrollKeepsActiveField(t *testing.T) {
+	inputs := []planInput{{Type: "input", Name: "name", Prompt: "Campo 1"}}
+	for i := 2; i <= 14; i++ {
+		inputs = append(inputs, planInput{Type: "input", Name: "f" + fmt.Sprint(i), Prompt: fmt.Sprintf("Campo %d", i)})
+	}
+	p := plan{Title: "T", Steps: []planStep{{Title: "S", Cmd: "true", Inputs: inputs}}}
+	m := viewTestModel(t, p, 14)
+	m.formIdx = len(inputs) - 1
+	m.prepareField(inputs[m.formIdx])
+
+	plain := ansiRe.ReplaceAllString(m.View(), "")
+	if !strings.Contains(plain, "Campo 14") {
+		t.Fatalf("campo activo fuera de la ventana:\n%s", plain)
 	}
 }
 
