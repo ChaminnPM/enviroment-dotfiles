@@ -7,10 +7,15 @@ on:
 
 jobs:
   lint:
-    name: bash + shellcheck + TOML
+    name: bash + shellcheck + Go + TOML
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ui/go.mod
+          cache-dependency-path: ui/go.sum
 
       - name: Sintaxis bash
         run: |
@@ -19,8 +24,13 @@ jobs:
           bash -n bootstrap.sh
           bash -n scripts/sync.sh
           bash -n scripts/lib/ui.sh
+          bash -n scripts/lib/dotfiles.sh
           bash -n scripts/setup-git-identity.sh
           bash -n scripts/update-external-skills.sh
+          bash -n scripts/apply-theme.sh
+          bash -n scripts/gen-theme-go.sh
+          bash -n scripts/lib/theme.sh
+          bash -n ui/build.sh
           for f in ui/examples/split-panel/*.sh; do
             [ -f "$f" ] && bash -n "$f" || true
           done
@@ -31,17 +41,80 @@ jobs:
             sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           fi
           shellcheck -S warning install.sh bootstrap.sh scripts/sync.sh \
-            scripts/lib/ui.sh scripts/setup-git-identity.sh \
-            scripts/update-external-skills.sh
+            scripts/lib/ui.sh scripts/lib/theme.sh scripts/lib/dotfiles.sh \
+            scripts/setup-git-identity.sh scripts/update-external-skills.sh \
+            scripts/apply-theme.sh scripts/gen-theme-go.sh ui/build.sh
 
-      - name: Validar TOML de alacritty
+      - name: Validar tema Dracula y plantillas TOML
         run: |
           python3 - <<'EOF'
-          import tomllib, glob, sys
-          for f in glob.glob('config/alacritty/**/*.toml', recursive=True):
-              tomllib.load(open(f, 'rb'))
-              print(f'{f}: OK')
+          import glob, json, tomllib
+
+          theme = {}
+          for raw in open('config/theme/dracula.env', encoding='utf-8'):
+              line = raw.strip()
+              if not line or line.startswith('#') or '=' not in line:
+                  continue
+              k, v = line.split('=', 1)
+              v = v.strip().strip('"').strip("'")
+              theme[k] = v
+
+          required = ['THEME_NAME', 'THEME_BG', 'THEME_FG', 'THEME_PURPLE',
+                      'THEME_GREEN', 'THEME_YELLOW', 'THEME_RED',
+                      'THEME_FONT_FAMILY', 'THEME_FONT_SIZE', 'THEME_NERD_VERSION']
+          missing = [k for k in required if not theme.get(k)]
+          assert not missing, f'faltan tokens: {missing}'
+          assert theme['THEME_NAME'] == 'dracula', theme['THEME_NAME']
+          assert theme['THEME_FONT_FAMILY'] == 'JetBrainsMono Nerd Font'
+          print('tokens de tema: OK')
+
+          extra = {
+              'THEME_WSL_WORKDIR': 'C:\\\\Users\\\\test',
+              'THEME_WSL_DISTRO': 'Debian',
+              'THEME_WSL_HOME': '/home/test',
+          }
+          ctx = dict(theme, **extra)
+          for tpl in sorted(glob.glob('config/alacritty/**/*.tpl', recursive=True)):
+              import re
+              src = open(tpl, encoding='utf-8').read()
+              rendered = re.sub(r'\{\{([A-Z0-9_]+)\}\}',
+                                lambda m: ctx.get(m.group(1), m.group(0)), src)
+              assert '{{' not in rendered, f'placeholder sin resolver en {tpl}'
+              tomllib.loads(rendered)
+              print(f'{tpl}: OK')
+
+          cli = json.load(open('config/opencode/cli.json'))
+          assert cli['theme']['name'] == theme['THEME_NAME'], cli['theme']
+          print('cli.json theme: OK')
           EOF
+
+      - name: Generador de tema de nui actualizado
+        run: |
+          bash scripts/gen-theme-go.sh /tmp/theme_generated.go
+          diff -u ui/theme_generated.go /tmp/theme_generated.go
+          echo 'ui/theme_generated.go: OK'
+
+      - name: Tests y calidad de nui
+        run: |
+          set -e
+          cd ui
+          unformatted="$(gofmt -l . || true)"
+          if [ -n "$unformatted" ]; then
+            echo "archivos sin gofmt:"; printf '%s\n' "$unformatted"; exit 1
+          fi
+          go vet ./...
+          go test -race ./...
+          # El codigo debe seguir compilando para macOS (no soportado, pero se
+          # mantiene sin romper el build cruzado).
+          GOOS=darwin GOARCH=arm64 go build ./...
+
+      - name: Documentacion de plataformas presente
+        run: |
+          set -e
+          test -f docs/PLATFORMS.md
+          grep -qi 'WSL' docs/PLATFORMS.md
+          grep -qi 'no soportad' docs/PLATFORMS.md
+          echo 'docs/PLATFORMS.md: OK'
 
       - name: Validar JSON del repo
         run: |
@@ -65,4 +138,7 @@ jobs:
           ui_v="$(cat ui/VERSION)"
           [ "$bin_v" = "$ui_v" ] || {
             echo "bin/VERSION ($bin_v) != ui/VERSION ($ui_v)"; exit 1; }
+          main_v="$(grep -o 'nuiVersion = "[^"]*"' ui/main.go | cut -d'"' -f2)"
+          [ "$bin_v" = "$main_v" ] || {
+            echo "bin/VERSION ($bin_v) != ui/main.go ($main_v)"; exit 1; }
           echo "nui v$bin_v consistente"

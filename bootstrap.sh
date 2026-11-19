@@ -13,17 +13,49 @@ ensure_log_dir
 
 VERBOSE="${VERBOSE:-0}"
 SKIP_GIT_IDENTITY="${SKIP_GIT_IDENTITY:-0}"
+ONLY_STEP="${ONLY_STEP:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --verbose) VERBOSE=1; export VERBOSE ;;
     --skip-git) SKIP_GIT_IDENTITY=1 ;;
+    --dry-run) NUI_DRY_RUN=1; export NUI_DRY_RUN ;;
+    --non-interactive) NUI_NONINTERACTIVE=1; export NUI_NONINTERACTIVE ;;
+    --no-color) NUI_NO_COLOR=1; export NUI_NO_COLOR; export NO_COLOR=1 ;;
+    --only) shift; ONLY_STEP="${1:-}"; export NUI_ONLY="$ONLY_STEP" ;;
+    --only=*) ONLY_STEP="${1#*=}"; export NUI_ONLY="$ONLY_STEP" ;;
+    -h|--help)
+      cat <<'HELP'
+Uso: bootstrap.sh [opciones]
+
+  --verbose            muestra toda la salida (sin panel)
+  --skip-git           omite la configuracion de identidad Git/SSH
+  --dry-run            imprime el plan de pasos y no ejecuta nada
+  --non-interactive    no hace preguntas; usa defaults y modo texto
+  --no-color           desactiva color (equivale a NO_COLOR=1)
+  --only <texto>       ejecuta solo los pasos cuyo titulo contenga <texto>
+  -h, --help           esta ayuda
+
+Solo Linux y WSL estan soportados. Ver docs/PLATFORMS.md.
+HELP
+      exit 0
+      ;;
     *) ui_warn "Argumento desconocido: $1" ;;
   esac
   shift
 done
 
-ui_install_ui || true
-export PATH="$HOME/.local/bin:$PATH"
+if command -v dotfiles_assert_supported >/dev/null 2>&1; then
+  dotfiles_assert_supported || exit 1
+fi
+
+# Dry-run: no se instala nui, no se tocan dotfiles; solo se arma el plan.
+if [ "${NUI_DRY_RUN:-0}" != "1" ]; then
+  ui_install_ui || true
+  export PATH="$HOME/.local/bin:$PATH"
+  dotfiles_env_load 2>/dev/null || true
+  dotfiles_backup "$HOME/.bashrc" || true
+  dotfiles_backup "$HOME/.bash_profile" || true
+fi
 
 APT_PREFIX="$(ui_apt_prefix)"
 export APT_PREFIX
@@ -37,11 +69,33 @@ command -v tar >/dev/null 2>&1 || APT_PKGS+=(tar)
 command -v gzip >/dev/null 2>&1 || APT_PKGS+=(gzip)
 command -v rsync >/dev/null 2>&1 || APT_PKGS+=(rsync)
 command -v numfmt >/dev/null 2>&1 || APT_PKGS+=(coreutils)
-command -v xdg-open >/dev/null 2>&1 || APT_PKGS+=(xdg-utils)
-# Portapapeles para el copiado de claves SSH (ui_copy_clip)
-command -v wl-copy >/dev/null 2>&1 || APT_PKGS+=(wl-clipboard)
-command -v xclip >/dev/null 2>&1 || APT_PKGS+=(xclip)
+# El portapapeles y el navegador solo tienen sentido con sesion grafica.
+# En servidores headless se omiten para no arrastrar paquetes inutiles.
+if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; then
+  command -v xdg-open >/dev/null 2>&1 || APT_PKGS+=(xdg-utils)
+  # Portapapeles para el copiado de claves SSH (ui_copy_clip)
+  command -v wl-copy >/dev/null 2>&1 || APT_PKGS+=(wl-clipboard)
+  command -v xclip >/dev/null 2>&1 || APT_PKGS+=(xclip)
+fi
 command -v ssh-keygen >/dev/null 2>&1 || APT_PKGS+=(openssh-client)
+# Gestor de paquetes: se detecta una vez y se usa en todos los pasos.
+PKG_MGR="$(ui_pkg_manager || true)"
+export PKG_MGR
+
+# Traduce nombres genericos a los de cada distro (solo los que difieren).
+if [ -n "$PKG_MGR" ] && [ "$PKG_MGR" != "apt-get" ]; then
+  _mapped=()
+  for _p in "${APT_PKGS[@]}"; do
+    case "$PKG_MGR:$_p" in
+      dnf:openssh-client) _mapped+=(openssh-clients) ;;
+      pacman:openssh-client) _mapped+=(openssh) ;;
+      *) _mapped+=("$_p") ;;
+    esac
+  done
+  APT_PKGS=("${_mapped[@]}")
+  unset _mapped _p
+fi
+
 # bash no puede exportar arrays: convertir a escalar antes de exportar.
 APT_PKGS_STR="${APT_PKGS[*]}"
 unset APT_PKGS
@@ -82,24 +136,32 @@ if [ -n "${APT_PREFIX:-}" ]; then
     sudo_ok=1
   else
     sudo_ok=0
-    echo "##warn Contraseña sudo no activa; apt no instalara nada"
-    echo "##log Completa el paso 'Credenciales sudo' (relanzando la instalación) para apt"
+    echo "##warn Contraseña sudo no activa; el gestor de paquetes no instalara nada"
+    echo "##log Completa el paso 'Credenciales sudo' (relanzando la instalación)"
   fi
 fi
 
-apt_run() {
+PKG_MGR="${PKG_MGR:-}"
+if [ -z "$PKG_MGR" ]; then
+  for _m in apt-get dnf pacman zypper apk; do
+    if command -v "$_m" >/dev/null 2>&1; then PKG_MGR="$_m"; break; fi
+  done
+fi
+export PKG_MGR
+
+pkg_run() {
   local log rc to
   log="$(mktemp)"
   to="${APT_TIMEOUT:-600}"
   rc=0
   export DEBIAN_FRONTEND=noninteractive
   if [ -n "${APT_PREFIX:-}" ]; then
-    timeout "$to" sudo -n apt-get "$@" >"$log" 2>&1 || rc=$?
+    timeout "$to" sudo -n "$@" >"$log" 2>&1 || rc=$?
   else
-    timeout "$to" apt-get "$@" >"$log" 2>&1 || rc=$?
+    timeout "$to" "$@" >"$log" 2>&1 || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
-    echo "##log apt termino con codigo $rc (ultimas lineas):"
+    echo "##log el gestor de paquetes termino con codigo $rc (ultimas lineas):"
     tail -n 5 "$log" 2>/dev/null | while IFS= read -r l; do echo "##log $l"; done
   fi
   rm -f "$log"
@@ -107,28 +169,59 @@ apt_run() {
 }
 
 if [ -n "${APT_PKGS:-}" ]; then
-  if command -v apt-get >/dev/null 2>&1; then
-    if [ "$sudo_ok" = "0" ]; then
-      echo "##log Omito instalacion de: ${APT_PKGS} (sudo no activo)"
-    else
-      echo "##log Actualizando indices"
-      apt_run update || true
-      echo "##log Instalando: ${APT_PKGS}"
-      if ! apt_run install -y --no-install-recommends ${APT_PKGS}; then
-        echo "##warn No se pudieron instalar: ${APT_PKGS}"
-      fi
-    fi
+  if [ -z "$PKG_MGR" ]; then
+    echo "##warn No hay gestor de paquetes conocido; instala: ${APT_PKGS}"
+  elif [ "$sudo_ok" = "0" ]; then
+    echo "##log Omito instalacion de: ${APT_PKGS} (sudo no activo)"
   else
-    echo "##warn apt-get no disponible; instala: ${APT_PKGS}"
+    case "$PKG_MGR" in
+      apt-get)
+        echo "##log Actualizando indices (apt)"
+        pkg_run apt-get update || true
+        echo "##log Instalando: ${APT_PKGS}"
+        if ! pkg_run apt-get install -y --no-install-recommends ${APT_PKGS}; then
+          echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        fi
+        ;;
+      dnf)
+        echo "##log Actualizando indices (dnf)"
+        pkg_run dnf makecache || true
+        echo "##log Instalando: ${APT_PKGS}"
+        pkg_run dnf install -y ${APT_PKGS} || echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        ;;
+      pacman)
+        echo "##log Actualizando indices (pacman)"
+        pkg_run pacman -Sy --noconfirm || true
+        echo "##log Instalando: ${APT_PKGS}"
+        pkg_run pacman -S --noconfirm ${APT_PKGS} || echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        ;;
+      zypper)
+        echo "##log Instalando: ${APT_PKGS}"
+        pkg_run zypper --non-interactive install ${APT_PKGS} || echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        ;;
+      apk)
+        echo "##log Instalando: ${APT_PKGS}"
+        pkg_run apk add --no-cache ${APT_PKGS} || echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        ;;
+    esac
   fi
 else
   echo "##log Todas las dependencias base ya estaban instaladas"
 fi
 if ! command -v git >/dev/null 2>&1; then
-  echo "##log git no esta disponible; instala: ${APT_PREFIX}apt-get install -y git"
+  echo "##log git no esta disponible; instala git con tu gestor de paquetes"
   exit 1
 fi
 echo "Dependencias base listas"
+EOF
+
+# La fuente se instala antes de configurar Alacritty para que el terminal
+# ya pueda renderizar los glifos Nerd desde el primer arranque.
+ui_panel_step "Fuente (JetBrains Mono Nerd)" --estimate 60 <<'EOF'
+# shellcheck source=lib/theme.sh
+source "$REPO_DIR/scripts/lib/theme.sh"
+theme_load_env || exit 1
+theme_ensure_font
 EOF
 
 if [ "$SKIP_GIT_IDENTITY" != "1" ]; then
@@ -287,6 +380,8 @@ option extras lazygit
 option extras neovim
 INPUTS
 ui_panel_step "Paquetes custom" --estimate 90 <<'EOF'
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
 if [ -z "${NUI_STEP_RESULT:-}" ] || [ ! -f "$NUI_STEP_RESULT" ]; then
   echo "##log Sin selección (modo no interactivo); nada que instalar"
   exit 0
@@ -305,13 +400,28 @@ apt_one() {
   to="${APT_TIMEOUT:-600}"
   rc=0
   export DEBIAN_FRONTEND=noninteractive
+  local mgr="${PKG_MGR:-}"
+  if [ -z "$mgr" ]; then
+    for _m in apt-get dnf pacman zypper apk; do
+      if command -v "$_m" >/dev/null 2>&1; then mgr="$_m"; break; fi
+    done
+  fi
+  local -a cmd
+  case "$mgr" in
+    apt-get) cmd=(apt-get install -y --no-install-recommends "$pkg") ;;
+    dnf) cmd=(dnf install -y "$pkg") ;;
+    pacman) cmd=(pacman -S --noconfirm "$pkg") ;;
+    zypper) cmd=(zypper --non-interactive install "$pkg") ;;
+    apk) cmd=(apk add --no-cache "$pkg") ;;
+    *) return 1 ;;
+  esac
   if [ -n "${APT_PREFIX:-}" ]; then
-    timeout "$to" sudo -n apt-get install -y --no-install-recommends "$pkg" >"$log" 2>&1 || rc=$?
+    timeout "$to" sudo -n "${cmd[@]}" >"$log" 2>&1 || rc=$?
   else
-    timeout "$to" apt-get install -y --no-install-recommends "$pkg" >"$log" 2>&1 || rc=$?
+    timeout "$to" "${cmd[@]}" >"$log" 2>&1 || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
-    echo "##log apt termino con codigo $rc para $pkg (ultimas lineas):"
+    echo "##log el gestor de paquetes termino con codigo $rc para $pkg (ultimas lineas):"
     tail -n 3 "$log" 2>/dev/null | while IFS= read -r l; do echo "##log $l"; done
   fi
   rm -f "$log"
@@ -322,7 +432,7 @@ CUSTOM_APT=()
 for p in ${SELECTED}; do
   case "$p" in
     lazyvim) ;;
-    fd-find) command -v fd >/dev/null 2>&1 || CUSTOM_APT+=(fd-find) ;;
+    fd-find) command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1 || CUSTOM_APT+=(fd-find) ;;
     lazygit) command -v lazygit >/dev/null 2>&1 || CUSTOM_APT+=(lazygit) ;;
     neovim) ;; # se maneja con ensure_nvim (requiere > 0.11.2)
     *) command -v "$p" >/dev/null 2>&1 || CUSTOM_APT+=("$p") ;;
@@ -330,7 +440,12 @@ for p in ${SELECTED}; do
 done
 
 if [ ${#CUSTOM_APT[@]} -gt 0 ]; then
-  if ! command -v apt-get >/dev/null 2>&1; then
+  if [ -z "${PKG_MGR:-}" ]; then
+    for _m in apt-get dnf pacman zypper apk; do
+      if command -v "$_m" >/dev/null 2>&1; then PKG_MGR="$_m"; break; fi
+    done
+  fi
+  if [ -z "${PKG_MGR:-}" ]; then
     echo "##warn Instala manualmente: ${CUSTOM_APT[*]}"
   elif [ -n "${APT_PREFIX:-}" ] && ! sudo -n true 2>/dev/null; then
     echo "##warn Contraseña sudo no activa; no puedo instalar: ${CUSTOM_APT[*]}"
@@ -392,15 +507,28 @@ ensure_nvim() {
   esac
   tmp="$(mktemp -d)"
   dir=""
+  local ver="${NEOVIM_VERSION:-v0.11.4}" ref base
   for asset in "nvim-linux-${arch}" "nvim-linux64"; do
-    echo "##log Descargando neovim (latest, ${asset})..."
-    if curl -fsSL "https://github.com/neovim/neovim/releases/latest/download/${asset}.tar.gz" -o "$tmp/nvim.tgz"; then
-      dir="$asset"
-      break
-    fi
+    for ref in "$ver" latest; do
+      if [ "$ref" = "latest" ]; then
+        base="https://github.com/neovim/neovim/releases/latest/download/${asset}.tar.gz"
+      else
+        base="https://github.com/neovim/neovim/releases/download/${ref}/${asset}.tar.gz"
+      fi
+      echo "##log Descargando neovim (${ref}, ${asset})..."
+      if curl -fsSL --retry 3 --max-time 300 "$base" -o "$tmp/nvim.tgz"; then
+        dir="$asset"
+        break 2
+      fi
+    done
   done
   if [ -z "$dir" ]; then
     echo "##warn No se pudo descargar neovim desde GitHub"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if [ -n "${NEOVIM_SHA256:-}" ] && ! dotfiles_verify_sha256 "$tmp/nvim.tgz" "$NEOVIM_SHA256" "neovim"; then
+    echo "##warn Checksum de neovim invalido; instalacion abortada"
     rm -rf "$tmp"
     return 1
   fi
@@ -410,7 +538,16 @@ ensure_nvim() {
     return 1
   fi
   mkdir -p "$HOME/.local"
-  rm -rf "$HOME/.local/nvim"
+  if [ -d "$HOME/.local/nvim" ]; then
+    local bak="$HOME/.local/nvim.bak-$(date +%Y%m%d-%H%M%S)"
+    if mv "$HOME/.local/nvim" "$bak" 2>/dev/null; then
+      echo "##log Respaldo de neovim anterior: $bak"
+    else
+      echo "##warn No se pudo respaldar ~/.local/nvim; se conserva y no se reemplaza"
+      rm -rf "$tmp"
+      return 1
+    fi
+  fi
   if ! mv "$tmp/$dir" "$HOME/.local/nvim"; then
     echo "##warn No se pudo instalar neovim en ~/.local/nvim"
     rm -rf "$tmp"
@@ -457,11 +594,14 @@ echo "Paquetes custom atendidos"
 EOF
 
 ui_panel_step "Node + nvm" --estimate 120 <<'EOF'
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
 export NVM_DIR="$HOME/.nvm"
+NVM_PIN="${NVM_VERSION:-v0.40.8}"
 if ! command -v node >/dev/null 2>&1; then
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-    echo "##log Instalando nvm"
-    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash >/dev/null 2>&1 \
+    echo "##log Instalando nvm $NVM_PIN"
+    curl -fsSL --retry 3 --max-time 60 "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_PIN}/install.sh" | bash >/dev/null 2>&1 \
       || echo "##warn No se pudo instalar nvm automáticamente"
   fi
   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
@@ -471,7 +611,15 @@ if ! command -v node >/dev/null 2>&1; then
   fi
 fi
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
-echo "Node $(node --version 2>/dev/null || echo '?')"
+if command -v node >/dev/null 2>&1; then
+  dotfiles_env_path_add "$(dirname "$(command -v node)")"
+  echo "Node $(node --version 2>/dev/null || echo '?')"
+else
+  echo "##warn Node no quedo disponible en este paso"
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  echo "##warn npm no esta disponible; el paso 'Restaurar configuración' no podra instalar dependencias"
+fi
 EOF
 
 ui_panel_step "Actualizar nvm (opcional)" --optional --estimate 30 <<'EOF'
@@ -482,13 +630,14 @@ if [ ! -s "$NVM_DIR/nvm.sh" ]; then
 fi
 . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
 cur="$(nvm --version 2>/dev/null || true)"
-want="0.40.8"
+want="${NVM_VERSION:-v0.40.8}"
+want="${want#v}"
 if [ "$cur" = "$want" ]; then
   echo "##log nvm $cur ya esta en la version fijada"
   exit 0
 fi
 echo "##log Actualizando nvm $cur -> $want"
-if curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v${want}/install.sh" | bash >/dev/null 2>&1 \
+if curl -fsSL --retry 3 --max-time 60 "https://raw.githubusercontent.com/nvm-sh/nvm/v${want}/install.sh" | bash >/dev/null 2>&1 \
   && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; then
   echo "##log nvm ahora: $(nvm --version 2>/dev/null || echo '?')"
 else
@@ -498,16 +647,29 @@ fi
 EOF
 
 ui_panel_step "OpenCode" --estimate 90 <<'EOF'
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
 if ! command -v opencode >/dev/null 2>&1; then
   tmp_oc="$(mktemp)"
   trap 'rm -f "$tmp_oc"' EXIT
+  url="${OPENCODE_INSTALL_URL:-https://opencode.ai/v2/install}"
   echo "##log Descargando instalador"
-  curl -fsSL https://opencode.ai/v2/install -o "$tmp_oc"
+  if ! curl -fsSL --retry 3 --max-time 120 "$url" -o "$tmp_oc"; then
+    echo "##warn No se pudo descargar el instalador de OpenCode"
+    exit 1
+  fi
+  if [ -n "${OPENCODE_SHA256:-}" ] && ! dotfiles_verify_sha256 "$tmp_oc" "$OPENCODE_SHA256" "opencode-install"; then
+    echo "##warn Checksum del instalador de OpenCode invalido"
+    exit 1
+  fi
   bash "$tmp_oc" --no-modify-path </dev/null >/dev/null 2>&1 \
     || { echo "##log El instalador de OpenCode falló"; exit 1; }
 fi
 for p in "$HOME/.opencode/bin" "$HOME/.local/bin" "$HOME/bin"; do
-  [ -d "$p" ] && PATH="$p:$PATH"
+  if [ -d "$p" ]; then
+    PATH="$p:$PATH"
+    dotfiles_env_path_add "$p"
+  fi
 done
 export PATH
 echo "OpenCode $(opencode --version 2>/dev/null || echo '?')"
@@ -527,39 +689,15 @@ if [ -f "$OPENCODE_DIR/package.json" ] && command -v npm >/dev/null 2>&1; then
   if ! (cd "$OPENCODE_DIR" && npm install >/dev/null 2>&1); then
     echo "##warn npm install falló; revisa node_modules manualmente"
   fi
+elif [ -f "$OPENCODE_DIR/package.json" ]; then
+  echo "##warn npm no disponible; no se instalaron las dependencias de $OPENCODE_DIR"
 fi
 echo "Configuración restaurada"
 EOF
 
 ui_panel_step "Alacritty (opcional)" --optional --estimate 5 <<'EOF'
-if ! command -v alacritty >/dev/null 2>&1; then
-  echo "##log Alacritty no detectado; paso omitido"
-  exit 0
-fi
-
-AL_VER="$(alacritty --version 2>/dev/null | sed -n 's/^Alacritty \([0-9][0-9.]*\).*/\1/p')"
-AL_MAJOR="${AL_VER%%.*}"
-AL_MINOR="${AL_VER#*.}"
-AL_MINOR="${AL_MINOR%%.*}"
-if [ "${AL_MAJOR:-0}" -lt 0 ] || { [ "${AL_MAJOR:-0}" -eq 0 ] && [ "${AL_MINOR:-0}" -lt 13 ]; }; then
-  echo "##warn Alacritty ${AL_VER:-desconocida} detectado; la config TOML requiere >= 0.13"
-  echo "##log Paso omitido para no sobrescribir configuracion incompatible"
-  exit 0
-fi
-
-AL_DIR="$HOME/.config/alacritty"
-if [ -f "$AL_DIR/alacritty.toml" ] || [ -f "$AL_DIR/alacritty.yml" ]; then
-  echo "##log Ya existe configuracion de alacritty en $AL_DIR; no se sobrescribe"
-  exit 0
-fi
-
-mkdir -p "$AL_DIR"
-if cp "$REPO_DIR/config/alacritty/alacritty.toml" "$AL_DIR/alacritty.toml" 2>/dev/null; then
-  echo "##log Config de alacritty instalada en $AL_DIR/alacritty.toml"
-else
-  echo "##warn No se pudo copiar la configuracion de alacritty"
-  exit 1
-fi
+# Plantillas + paleta centralizadas en apply-theme.sh (config/theme/dracula.env).
+bash "$REPO_DIR/scripts/apply-theme.sh" --alacritty
 EOF
 
 ui_panel_step "graphify" --estimate 15 <<'EOF'
@@ -577,72 +715,112 @@ fi
 EOF
 
 ui_panel_step "oh-my-bash" --estimate 45 <<'EOF'
-# Respaldo unico de .bashrc antes de la primera modificacion
-if [ -f "$HOME/.bashrc" ] && ! ls "$HOME"/.bashrc.bak-dotfiles-* >/dev/null 2>&1; then
-  if cp -p "$HOME/.bashrc" "$HOME/.bashrc.bak-dotfiles-$(date +%Y%m%d-%H%M%S)" 2>/dev/null; then
-    echo "##log Respaldo de .bashrc creado"
-  else
-    echo "##warn No se pudo crear el respaldo de .bashrc"
-  fi
-fi
+# shellcheck source=lib/theme.sh
+source "$REPO_DIR/scripts/lib/theme.sh"
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
+theme_load_env || exit 1
+OMB_THEME="${THEME_OMB_THEME:-vscode}"
+
+# Respaldo por ejecucion (el bootstrap ya respalda .bashrc al inicio; esto es
+# idempotente y cubre ejecuciones standalone del paso).
+dotfiles_backup "$HOME/.bashrc" || true
+
 if [ ! -d "$HOME/.oh-my-bash" ]; then
   echo "##log Clonando oh-my-bash"
-  git clone https://github.com/ohmybash/oh-my-bash.git "$HOME/.oh-my-bash" >/dev/null 2>&1 \
+  git clone --depth 1 https://github.com/ohmybash/oh-my-bash.git "$HOME/.oh-my-bash" >/dev/null 2>&1 \
     || { echo "##log Falló el clonado de oh-my-bash"; exit 1; }
 fi
-if ! grep -q 'oh-my-bash/oh-my-bash.sh' "$HOME/.bashrc" 2>/dev/null; then
-  {
-    echo 'export OSH="$HOME/.oh-my-bash"'
-    echo 'OSH_THEME="vscode"'
-    echo 'source "$OSH/oh-my-bash.sh"'
-  } >> "$HOME/.bashrc"
+
+osh_header='# >>> dotfiles-oh-my-bash (no editar)'
+osh_footer='# <<< dotfiles-oh-my-bash'
+osh_tmp="$(mktemp)"
+{
+  printf 'export OSH="$HOME/.oh-my-bash"\n'
+  printf 'OSH_THEME="%s"\n' "$OMB_THEME"
+  printf '%s\n' 'source "$OSH/oh-my-bash.sh"'
+} > "$osh_tmp"
+if ! dotfiles_managed_block "$HOME/.bashrc" "$osh_header" "$osh_footer" append \
+    "$(dotfiles_file_mode "$HOME/.bashrc")" < "$osh_tmp"; then
+  echo "##warn ~/.bashrc tiene un bloque de oh-my-bash incompleto; no se modifico"
+  rm -f "$osh_tmp"
+  exit 1
 fi
-if ! grep -q 'OSH_THEME="vscode"' "$HOME/.bashrc" 2>/dev/null; then
-  sed -i 's/^OSH_THEME=.*/OSH_THEME="vscode"/' "$HOME/.bashrc" 2>/dev/null || true
-fi
-echo "oh-my-bash listo"
+rm -f "$osh_tmp"
+echo "oh-my-bash listo (tema $OMB_THEME)"
+EOF
+
+# Se ejecuta al final para que el tema alcance tambien los paquetes custom
+# instalados arriba (bat, eza, fzf) y los snippets de shell ya generados.
+ui_panel_step "Tema (Dracula)" --estimate 15 <<'EOF'
+bash "$REPO_DIR/scripts/apply-theme.sh"
 EOF
 
 ui_panel_step "herdr" --estimate 45 <<'EOF'
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
 if ! command -v herdr >/dev/null 2>&1; then
   echo "##log Instalando herdr"
-  curl -fsSL https://herdr.dev/install.sh | sh >/dev/null 2>&1 \
-    || echo "##warn herdr no se instaló automáticamente"
+  herdr_tmp="$(mktemp)"
+  trap 'rm -f "$herdr_tmp"' EXIT
+  url="${HERDR_INSTALL_URL:-https://herdr.dev/install.sh}"
+  if curl -fsSL --retry 3 --max-time 120 "$url" -o "$herdr_tmp"; then
+    if [ -n "${HERDR_SHA256:-}" ] && ! dotfiles_verify_sha256 "$herdr_tmp" "$HERDR_SHA256" "herdr-install"; then
+      echo "##warn Checksum del instalador de herdr invalido"
+      exit 1
+    fi
+    sh "$herdr_tmp" </dev/null >/dev/null 2>&1 \
+      || echo "##warn herdr no se instaló automáticamente"
+  else
+    echo "##warn No se pudo descargar el instalador de herdr"
+  fi
 fi
 for p in "$HOME/.herdr/bin" "$HOME/.local/bin" "$HOME/.opencode/bin"; do
-  [ -d "$p" ] && PATH="$p:$PATH"
+  if [ -d "$p" ]; then
+    PATH="$p:$PATH"
+    dotfiles_env_path_add "$p"
+  fi
 done
 export PATH
-if ! grep -q 'export PATH=.*\.local/bin' "$HOME/.bashrc" 2>/dev/null; then
-  echo 'export PATH="$HOME/.local/bin:$HOME/.herdr/bin:$HOME/.opencode/bin:$PATH"' >> "$HOME/.bashrc"
-fi
 echo "herdr atendido"
 EOF
 
 ui_panel_step "Wrappers" --estimate 10 <<'EOF'
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
 mkdir -p "$HOME/.local/bin"
-cat > "$HOME/.local/bin/sync-dotfiles" <<'WRAP'
+dotfiles_env_path_add "$HOME/.local/bin"
+sync_url="${SYNC_SCRIPT_URL:-https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/scripts/sync.sh}"
+cat > "$HOME/.local/bin/sync-dotfiles" <<WRAP
 #!/usr/bin/env bash
 set -euo pipefail
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="\$HOME/.local/bin:\$PATH"
 if ! command -v git >/dev/null 2>&1; then
   echo "git no está instalado. Ejecuta bootstrap.sh o instala git." >&2
   exit 1
 fi
-exec bash <(curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/scripts/sync.sh) "$@"
+exec bash <(curl -fsSL --retry 3 --max-time 60 "$sync_url") "\$@"
 WRAP
-chmod +x "$HOME/.local/bin/sync-dotfiles"
+chmod 755 "$HOME/.local/bin/sync-dotfiles"
 echo "sync-dotfiles instalado"
 EOF
 
 ui_panel_step "Persistencia de entorno" --estimate 10 <<'EOF'
-if [ -f "$HOME/.bash_profile" ]; then
-  grep -q 'source ~/.bashrc' "$HOME/.bash_profile" 2>/dev/null \
-    || echo 'source ~/.bashrc' >> "$HOME/.bash_profile"
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
+bp="$HOME/.bash_profile"
+[ -f "$bp" ] || { : > "$bp"; chmod 644 "$bp" 2>/dev/null || true; }
+dotfiles_backup "$bp" || true
+bp_header='# >>> dotfiles-shell (no editar)'
+bp_footer='# <<< dotfiles-shell'
+bp_tmp="$(mktemp)"
+printf '%s\n' '[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"'
+if dotfiles_managed_block "$bp" "$bp_header" "$bp_footer" append "$(dotfiles_file_mode "$bp")" < "$bp_tmp"; then
+  echo "Entorno persistente"
 else
-  echo 'source ~/.bashrc' > "$HOME/.bash_profile"
+  echo "##warn ~/.bash_profile tiene un bloque incompleto; no se modifico"
 fi
-echo "Entorno persistente"
+rm -f "$bp_tmp"
 EOF
 
 rc=0

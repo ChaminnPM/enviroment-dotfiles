@@ -31,9 +31,9 @@ function bar(percent: number): string {
 }
 
 function colorFor(percent: number, theme: any): string {
-  if (percent >= 90) return theme?.error ?? "#f38ba8"
-  if (percent >= 70) return theme?.warning ?? "#f9e2af"
-  return theme?.success ?? "#a6e3a1"
+  if (percent >= 90) return theme?.error ?? "#ff5555"
+  if (percent >= 70) return theme?.warning ?? "#f1fa8c"
+  return theme?.success ?? "#50fa7b"
 }
 
 function buildDialogText(data: any): string {

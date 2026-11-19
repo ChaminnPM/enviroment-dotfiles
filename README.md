@@ -1,6 +1,13 @@
 # enviroment-dotfiles (publico)
 
-Configuracion portable de OpenCode para **Linux** (Debian/Ubuntu, apt-get).
+Configuracion portable de OpenCode para **Linux y WSL**. Funciona con
+`apt-get` (Debian/Ubuntu), `dnf` (Fedora/RHEL), `pacman` (Arch), `zypper`
+(openSUSE) y `apk` (Alpine). macOS y Windows nativo **no estan soportados**:
+ver [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
+
+Incluye un tema canonico (**Dracula + JetBrainsMono Nerd Font**) que se aplica
+a todas las herramientas durante la instalacion, incluida la instalacion de
+la fuente.
 
 ## One-liner
 ```bash
@@ -14,7 +21,8 @@ El one-liner descarga el repo como **tarball** y no requiere `git` para empezar.
 2. Descargar el repo publico como tarball a un directorio temporal.
 3. Ejecutar `bootstrap.sh`.
 4. `bootstrap.sh`:
-   - Instala `git` y dependencias base si faltan.
+   - Instala `git` y dependencias base si faltan (paquetes de escritorio solo si hay `DISPLAY`/`WAYLAND_DISPLAY`).
+   - **Fuente**: instala JetBrainsMono Nerd Font (`v3.4.0`) en `~/.local/share/fonts` si `fc-match` no la encuentra; es idempotente.
    - Instala `nui` (binario propio con [bubbletea](https://github.com/charmbracelet/bubbletea)) si falta o si la version instalada difiere de `bin/VERSION`, y lo usa para banners, spinners y prompts.
    - Configura las cuentas Git: personal obligatoria y hasta 3 espacios opcionales con carpeta propia (ver "Cuentas Git" mas abajo). Para omitirlo:
      ```bash
@@ -32,19 +40,64 @@ El one-liner descarga el repo como **tarball** y no requiere `git` para empezar.
      - `zoxide`
      - `fd-find`
    - Instala Node/nvm, OpenCode, configuracion publica, `graphify`, `oh-my-bash` y `herdr`.
+   - Aplica Alacritty y, al final, el **tema** a todas las herramientas presentes.
    - Instala el wrapper publico `sync-dotfiles`.
 5. Elimina el directorio temporal del repo: no queda `~/enviroment-dotfiles` instalado localmente.
 
+### Opciones del instalador
+```bash
+bash install.sh --help          # o: bash bootstrap.sh --help
+
+  --verbose            muestra toda la salida (sin panel)
+  --dry-run            imprime el plan de pasos y no ejecuta nada
+  --non-interactive    no hace preguntas; usa defaults y modo texto
+  --no-color           desactiva color (equivale a NO_COLOR=1)
+  --only <texto>       ejecuta solo los pasos cuyo titulo contenga <texto>
+  --skip-git           omite la configuracion de identidad Git/SSH
+```
+
+`install.sh` acepta las mismas opciones y las reenvia a `bootstrap.sh`.
+Tambien puedes usar `NUI_DRY_RUN=1`, `NUI_NONINTERACTIVE=1`, `NUI_NO_COLOR=1`
+y `VERBOSE=1` como variables de entorno.
+
+### Respaldos y bloques gestionados
+- Antes de modificar un archivo se crea una copia en
+  `~/.local/state/enviroment-dotfiles/backups/` (una por archivo y ejecucion).
+- Los archivos se escriben de forma atomica (temporal en el mismo directorio +
+  `mv`) conservando permisos; `~/.bashrc` ya no cambia de `0644` a `0600`.
+- `~/.bashrc`, `~/.bash_profile`, `~/.gitconfig` y `~/.ssh/config` solo se
+  editan entre marcadores (`# >>> dotfiles-...` / `# <<< dotfiles-...`). Si el
+  bloque esta incompleto, el script **no** toca el archivo y avisa.
+- Los permisos sensibles se fijan: claves SSH y perfiles git `0600`,
+  `~/.ssh/config` `0600`, logs en `0700`/`0600`.
+- `PATH` de herramientas instaladas (nvm, opencode, herdr) se persiste en
+  `~/.config/enviroment-dotfiles/env.sh`, que cada paso carga antes de ejecutar.
+
 ## Contenido publico
 - `config/opencode/`: config global de OpenCode, sin contenido Nuxiba.
-- `config/alacritty/`: config base de Alacritty (TOML, requiere alacritty >= 0.13); solo se instala si `alacritty` esta en el PATH y no existe configuracion previa. `windows/` guarda la copia exacta de la config de Windows (arranque de WSL Debian); la raiz es la version portable adaptada a Linux.
+- `config/theme/dracula.env`: fuente unica de verdad del tema (paleta, tipografia, pin de Nerd Font y colores de fzf/eza).
+- `config/alacritty/`: plantillas TOML (requiere alacritty >= 0.13) generadas desde `config/theme/dracula.env`. `common.toml.tpl` lleva fuente y paleta; `linux.toml.tpl` y `windows-wsl.toml.tpl` son overlays segun el entorno (`DOTFILES_ENV`). Solo se instala si `alacritty` esta en el PATH y no hay configuracion previa no gestionada.
 - `agents/`: `net-qa`, `react-qa`, `lua-qa`. (`analyze-webrtc-dumps` vive en el repo privado.)
 - `skills/`: `generate-test-cases`, `generate-tests`, `graphify` (externa), `security-audit` (externa).
 - `plugins/`: `herdr-agent-state.js`, `usage-limits`.
 - `memory/skills-best-practices.md`: guia de escritura de skills/agents.
 - `AGENTS.md`: instrucciones generales con graphify.
 - `scripts/`: instalacion, sincronizacion, identidad Git y actualizacion de skills externas.
-- `.github/workflows/ci.yml`: CI con bash -n, shellcheck y validacion de TOML/JSON en cada push.
+- `.github/workflows/ci.yml`: CI con bash -n, shellcheck, `gofmt`/`go vet`/`go test -race`, validacion de TOML/JSON y build cruzado de `nui`.
+
+## Tema y tipografia
+`config/theme/dracula.env` es la **unica** definicion del tema y se aplica en cada instalacion:
+
+- **Paleta Dracula**: fondo `#282a36`, texto `#f8f8f2`, seleccion `#44475a`, y los colores normales/bright que ya usaba `alacritty.toml`.
+- **Fuente**: `JetBrainsMono Nerd Font`, tamano `10.0`, Nerd Fonts `v3.4.0`. Se descarga el zip oficial `JetBrainsMono.zip`, se extrae con `python3` en `~/.local/share/fonts` y se refresca `fc-cache`. Si `fc-match` ya la resuelve, no se toca nada.
+- **Alacritty**: `common.toml.tpl` + overlay de entorno. En WSL se usa `windows-wsl.toml.tpl` con `wsl.exe`; en Linux puro, `linux.toml.tpl`. Los valores `THEME_WSL_WORKDIR`, `THEME_WSL_DISTRO` y `THEME_WSL_HOME` se pueden override por entorno.
+- **OpenCode**: `cli.json` ya trae `theme: dracula` / `mode: dark`; el paso de tema solo avisa si hay desvio.
+- **oh-my-bash**: el tema se toma de `THEME_OMB_THEME` (por defecto `vscode`, el mas cercano disponible).
+- **Shell**: snippet gestionado en `~/.bashrc` entre `# >>> dotfiles-theme` / `# <<< dotfiles-theme` con `BAT_THEME`, `EXA_COLORS`/`EZA_COLORS`, `FZF_DEFAULT_OPTS` y `LS_COLORS` (`dircolors`). Fuera de los marcadores no se sobrescribe nada.
+- **git**: `~/.config/git/theme.gitconfig` con `[color]`; `setup-git-identity.sh` lo incluye via `[include]` para que no se pierda al regenerar `~/.gitconfig`.
+- **`nui`**: sus colores se generan en `ui/theme_generated.go` desde el mismo `.env` (`bash scripts/gen-theme-go.sh`) y CI verifica que este al dia.
+
+Overrides utiles: `THEME_ENV_FILE`, `THEME_NERD_VERSION`, `THEME_NERD_REPO_URL`, `DOTFILES_ENV=linux|windows-wsl`. El resultado queda en `~/.config/enviroment-dotfiles/theme.json` y `sync-dotfiles doctor` verifica la fuente y el pin.
 
 ## service.json.example
 `service.json.example` es la plantilla de configuracion privada local. Se copia a
@@ -74,9 +127,11 @@ cuentas opcionales** ("espacios"):
 - **Validaciones**: el nombre del espacio se normaliza a slug (sin espacios ni
   acentos), se rechazan duplicados, nombres que empiezan por `.` y rutas con `/`
   (no se permiten carpetas anidadas entre espacios).
-- **Migracion**: si existia el esquema viejo (repos Nuxiba en
-  `~/Documents/Repositorios`) y hay exactamente una cuenta opcional, su contenido
-  se mueve a la carpeta del espacio y el include legado desaparece.
+- **Migracion (opt-in)**: si existia el esquema viejo (repos Nuxiba en
+  `~/Documents/Repositorios`) y hay exactamente una cuenta opcional, se puede
+  mover su contenido a la carpeta del espacio. Ya **no** se hace de forma
+  automatica: se pregunta en modo interactivo o se activa con
+  `GIT_MIGRATE_LEGACY=1`; por defecto la carpeta legada se conserva intacta.
 - **Limitacion**: un repo personal clonado *dentro* de la carpeta de un espacio
   usara la clave de ese espacio para la plataforma del espacio (limitacion de
   `insteadOf`, aplicado por carpeta).
@@ -97,12 +152,19 @@ La instalacion no deja repos locales. Usa los wrappers instalados en `~/.local/b
 sync-dotfiles pull
 sync-dotfiles push
 sync-dotfiles doctor
+sync-dotfiles pull --dry-run     # muestra que haria, sin tocar nada
 
 sync-dotfiles-private pull
 sync-dotfiles-private push
 ```
 
-`doctor` verifica el estado del entorno (versiones vs pins, skills externas, claves SSH) y sale 1 si hay avisos.
+- `pull` descarga por **HTTPS** (no requiere llaves SSH) y aplica los assets
+  publicos. `rsync` **no** borra archivos extra por defecto; usa
+  `sync-dotfiles pull --delete` si quieres que el destino quede identico al repo.
+- `push` si requiere SSH de GitHub y solo commitea las rutas publicas
+  (`PUBLIC_PATHS`), nunca cambios a medias de otras carpetas.
+- `doctor` verifica versiones vs pins, skills externas, claves SSH, permisos
+  (`0600`) y bloques gestionados; sale 1 si hay avisos.
 
 Los wrappers verifican que exista `git` antes de sincronizar.
 
@@ -121,7 +183,9 @@ bash scripts/sync.sh push
 ```
 
 ## Requiere
-- Base: `git`, `curl`, `bash`, `python3`, `node` (nvm), `npm`, `rsync`, `openssh-client`, `xdg-utils`, `tar`, `gzip` (instalados por `bootstrap.sh` si faltan).
+- Linux o WSL (ver [`docs/PLATFORMS.md`](docs/PLATFORMS.md)).
+- Base: `git`, `curl`, `bash`, `python3`, `node` (nvm), `npm`, `rsync`, `openssh-client`, `tar`, `gzip` (instalados por `bootstrap.sh` si faltan, con `apt-get`/`dnf`/`pacman`/`zypper`/`apk`). `xdg-utils`, `wl-clipboard` y `xclip` solo con sesion grafica.
+- Tema: `fontconfig` (`fc-match`/`fc-cache`) para verificar e instalar JetBrainsMono Nerd Font; si no esta, los TTFs se copian igual y el paso avisa.
 - `nui`: binario estatico propio (bubbletea + lipgloss) que se instala automaticamente desde `bin/nui-<os>-<arch>.gz` (o `NUI_BASE_URL`).
 - `herdr` y `oh-my-bash`: se instalan automaticamente.
 

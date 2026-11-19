@@ -7,17 +7,23 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"golang.org/x/term"
 )
 
-// Paleta: indigo GitHub-like + estados.
+// disableColor apaga el color de lipgloss (--no-color / NO_COLOR).
+func disableColor() {
+	lipgloss.SetColorProfile(termenv.Ascii)
+}
+
+// Paleta Dracula: constantes generadas desde config/theme/dracula.env.
 var (
-	colAccent = lipgloss.Color("#7B7FE6")
-	colWhite  = lipgloss.Color("#FFFFFF")
-	colDim    = lipgloss.Color("#6C7086")
-	colGreen  = lipgloss.Color("#A6E3A1")
-	colRed    = lipgloss.Color("#F38BA8")
-	colYellow = lipgloss.Color("#F9E2AF")
+	colAccent = lipgloss.Color(themePurple)
+	colWhite  = lipgloss.Color(themeFg)
+	colDim    = lipgloss.Color(themeComment)
+	colGreen  = lipgloss.Color(themeGreen)
+	colRed    = lipgloss.Color(themeRed)
+	colYellow = lipgloss.Color(themeYellow)
 )
 
 func isTTY(f *os.File) bool {

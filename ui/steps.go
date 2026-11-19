@@ -2,17 +2,20 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -52,7 +55,7 @@ type planInput struct {
 	Default string           `json:"default"`
 	Options []string         `json:"options"`
 	Multi   bool             `json:"multi"`
-	Path    string           `json:"path,omitempty"`   // para type=key
+	Path    string           `json:"path,omitempty"`    // para type=key
 	ShowIf  []inputCondition `json:"show_if,omitempty"` // todas las condiciones deben cumplirse
 }
 
@@ -224,9 +227,8 @@ type runStep struct {
 }
 
 const (
-	maxStepLogs  = 400
-	maxPanelLogs = 500
-	maxLineLen   = 400
+	maxStepLogs = 400
+	maxLineLen  = 400
 )
 
 // ---------------------------------------------------------------- mensajes
@@ -244,6 +246,7 @@ type (
 	startStepMsg struct{ idx int }
 	quitNowMsg   struct{}
 	repaintMsg   struct{}
+	ctxDoneMsg   struct{}
 )
 
 // ---------------------------------------------------------------- runner
@@ -279,28 +282,58 @@ func (r *runner) kill() {
 	}
 }
 
+// killGroup pide al grupo del proceso que termine y, si sigue vivo tras un
+// margen, lo mata. Sin la escalada, `apt-get`/`npm` pueden quedar huérfanos
+// reteniendo el lock del gestor de paquetes.
 func killGroup(c *exec.Cmd) {
 	if c.Process == nil {
 		return
 	}
-	if pgid, err := syscall.Getpgid(c.Process.Pid); err == nil && pgid > 0 {
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	pgid := c.Process.Pid
+	if g, err := syscall.Getpgid(c.Process.Pid); err == nil && g > 0 {
+		pgid = g
 	}
-	_ = c.Process.Kill()
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	_ = syscall.Kill(-pgid, syscall.SIGCONT)
+	go func(pgid int) {
+		time.Sleep(3 * time.Second)
+		// Solo si el grupo sigue existiendo (evita matar un pgid reutilizado).
+		if err := syscall.Kill(-pgid, 0); err == nil {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+	}(pgid)
+}
+
+// runCmd arranca c y lo mata (con escalada) si ctx se cancela.
+func runCmd(ctx context.Context, c *exec.Cmd) error {
+	if err := c.Start(); err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			killGroup(c)
+		case <-done:
+		}
+	}()
+	err := c.Wait()
+	close(done)
+	return err
 }
 
 // ---------------------------------------------------------------- modelo
 
 type stepsModel struct {
-	plan     plan
-	steps    []runStep
-	cursor   int
-	current  int
-	pinned   int
-	canceled bool
-	finished bool
-	showHelp bool
-	showSteps bool // al terminar: alternar entre reporte y lista de pasos
+	plan       plan
+	steps      []runStep
+	cursor     int
+	current    int
+	pinned     int
+	canceled   bool
+	finished   bool
+	showHelp   bool
+	showSteps  bool // al terminar: alternar entre reporte y lista de pasos
 	focusSteps bool // con formulario abierto: foco en la lista de pasos
 
 	width  int
@@ -312,6 +345,10 @@ type stepsModel struct {
 	logDir   string
 	stateDir string
 	run      *runner
+	ctx      context.Context
+
+	// keyCache evita leer archivos de claves en cada repintado (View).
+	keyCache map[string]string
 
 	spinner  spinner.Model
 	progress progress.Model
@@ -331,10 +368,10 @@ type stepsModel struct {
 func newStepsModel(p plan, logDir string) stepsModel {
 	prog := progress.New(
 		progress.WithoutPercentage(),
-		progress.WithSolidFill("#7B7FE6"),
+		progress.WithSolidFill(themePurple),
 		progress.WithFillCharacters('█', '░'),
 	)
-	prog.EmptyColor = "#4B4F60"
+	prog.EmptyColor = themeCurrent
 
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
@@ -356,6 +393,8 @@ func newStepsModel(p plan, logDir string) stepsModel {
 		pinned:    -1,
 		logDir:    logDir,
 		run:       &runner{},
+		ctx:       context.Background(),
+		keyCache:  map[string]string{},
 		startedAt: time.Now(),
 		spinner:   sp,
 		progress:  prog,
@@ -364,7 +403,15 @@ func newStepsModel(p plan, logDir string) stepsModel {
 }
 
 func (m stepsModel) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.startStep(0))
+	return tea.Batch(m.spinner.Tick, m.startStep(0), waitCtx(m.ctx))
+}
+
+// waitCtx convierte SIGTERM/SIGINT externos en un mensaje del event loop.
+func waitCtx(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		<-ctx.Done()
+		return ctxDoneMsg{}
+	}
 }
 
 func (m stepsModel) startStep(idx int) tea.Cmd {
@@ -376,6 +423,18 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
+
+	case ctxDoneMsg:
+		if m.current >= 0 && m.current < len(m.steps) && m.steps[m.current].state == stRunning {
+			m.run.kill()
+		}
+		m.markCanceled()
+		m.canceled = true
+		if !m.finished {
+			m.finished = true
+			m.elapsed = time.Since(m.startedAt)
+		}
+		return m, tea.Quit
 
 	case tea.KeyMsg:
 		// ctrl+↑/↓ navega los pasos incluso desde el formulario.
@@ -579,8 +638,23 @@ func (m *stepsModel) prepareField(in planInput) {
 		if first >= 0 {
 			m.formCursor = first
 		}
+	case "key":
+		// La lectura se hace al entrar al campo, no en cada repintado.
+		m.loadKey(in)
 	}
 	m.input.Focus()
+}
+
+// loadKey guarda en cache el contenido de la clave que muestra el formulario.
+func (m *stepsModel) loadKey(in planInput) {
+	if m.keyCache == nil {
+		m.keyCache = map[string]string{}
+	}
+	if data, err := os.ReadFile(expandPath(in.Path)); err == nil {
+		m.keyCache[in.Path] = string(data)
+	} else {
+		m.keyCache[in.Path] = ""
+	}
 }
 
 // storeField guarda el valor del campo activo antes de cambiar de campo, para
@@ -749,19 +823,24 @@ func (m stepsModel) advanceForm(idx int) (tea.Model, tea.Cmd) {
 
 func (m stepsModel) finishForm(idx int) (tea.Model, tea.Cmd) {
 	m.formActive = false
-	m.saveResults(idx)
+	// La escritura del resultado es pequeña y debe existir antes de que el paso
+	// arranque; se hace aquí (no en View ni en el bucle de ejecución).
+	m.writeResults(idx, m.resultsContent(idx))
 	ps := m.plan.Steps[idx]
 	if ps.Interactive {
 		c := exec.Command("bash", "-c", ps.Cmd)
-		c.Env = m.stepEnv("TERM=xterm-256color")
+		c.Env = m.stepEnv(idx, "TERM=xterm-256color")
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return stepDoneMsg{idx: idx, err: err}
 		})
 	}
-	m.execStep(idx)
-	return m, tea.Batch(tea.ClearScreen, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
-		return stepTickMsg{idx: idx}
-	}))
+	return m, tea.Batch(
+		tea.ClearScreen,
+		m.execStep(idx),
+		tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
+			return stepTickMsg{idx: idx}
+		}),
+	)
 }
 
 func (m *stepsModel) skipStep(idx int, note string) {
@@ -782,12 +861,8 @@ func (m stepsModel) nextAfter(idx int) (tea.Model, tea.Cmd) {
 	return m, tea.ClearScreen
 }
 
-// saveResults escribe los valores del formulario en $NUI_STATE_DIR.
-func (m stepsModel) saveResults(idx int) {
-	if m.stateDir == "" {
-		return
-	}
-	_ = os.MkdirAll(m.stateDir, 0o755)
+// resultsContent serializa los valores del formulario en formato KEY='valor'.
+func (m stepsModel) resultsContent(idx int) string {
 	vis := visibleInputs(m.plan.Steps[idx].Inputs, m.formVals)
 	shown := make(map[string]bool, len(vis))
 	for _, in := range vis {
@@ -801,19 +876,28 @@ func (m stepsModel) saveResults(idx int) {
 		}
 		b.WriteString(in.Name + "=" + shellQuote(val) + "\n")
 	}
+	return b.String()
+}
+
+// writeResults escribe los valores del formulario en $NUI_STATE_DIR.
+func (m stepsModel) writeResults(idx int, content string) {
+	if m.stateDir == "" || content == "" {
+		return
+	}
+	_ = os.MkdirAll(m.stateDir, 0o700)
 	_ = os.WriteFile(filepath.Join(m.stateDir, fmt.Sprintf("result-%02d.env", idx+1)),
-		[]byte(b.String()), 0o600)
+		[]byte(content), 0o600)
 }
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func (m stepsModel) stepEnv(extra ...string) []string {
+func (m stepsModel) stepEnv(idx int, extra ...string) []string {
 	env := append(os.Environ(), "TERM=dumb", "NO_COLOR=1", "CLICOLOR=0")
 	if m.stateDir != "" {
 		env = append(env, "NUI_STATE_DIR="+m.stateDir,
-			fmt.Sprintf("NUI_STEP_RESULT=%s", filepath.Join(m.stateDir, fmt.Sprintf("result-%02d.env", m.current+1))))
+			fmt.Sprintf("NUI_STEP_RESULT=%s", filepath.Join(m.stateDir, fmt.Sprintf("result-%02d.env", idx+1))))
 	}
 	return append(env, extra...)
 }
@@ -838,75 +922,76 @@ func (m stepsModel) begin(idx int) (tea.Model, tea.Cmd) {
 	}
 	if ps.Interactive {
 		c := exec.Command("bash", "-c", ps.Cmd)
-		c.Env = m.stepEnv("TERM=xterm-256color")
+		c.Env = m.stepEnv(idx, "TERM=xterm-256color")
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return stepDoneMsg{idx: idx, err: err}
 		})
 	}
 
-	m.execStep(idx)
-	return m, tea.Batch(tea.ClearScreen, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
-		return stepTickMsg{idx: idx}
-	}))
+	return m, tea.Batch(
+		tea.ClearScreen,
+		m.execStep(idx),
+		tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
+			return stepTickMsg{idx: idx}
+		}),
+	)
 }
 
-// execStep lanza el comando y transmite su salida al panel línea a línea.
-func (m *stepsModel) execStep(idx int) {
+// execStep es un tea.Cmd: arranca el comando, transmite su salida al panel
+// línea a línea y devuelve stepDoneMsg al terminar. No bloquea el event loop.
+func (m stepsModel) execStep(idx int) tea.Cmd {
 	ps := m.plan.Steps[idx]
 	logPath := m.logPath(idx)
-	logFile, logErr := os.Create(logPath)
-	if logErr != nil {
-		logFile = nil
-	}
+	env := m.stepEnv(idx)
+	run := m.run
 
-	c := exec.Command("bash", "-c", ps.Cmd)
-	c.Env = m.stepEnv()
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	pr, pw := io.Pipe()
-	c.Stdout = pw
-	c.Stderr = pw
-
-	go func() {
+	return func() tea.Msg {
+		logFile, err := os.Create(logPath)
+		if err != nil {
+			logFile = nil
+		}
 		defer func() {
 			if logFile != nil {
-				logFile.Close()
+				_ = logFile.Close()
 			}
 		}()
-		sc := bufio.NewScanner(pr)
-		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for sc.Scan() {
-			line := sc.Text()
-			if logFile != nil {
-				fmt.Fprintln(logFile, line)
-			}
-			if stepsProgram != nil {
-				stepsProgram.Send(lineMsg{idx: idx, line: line})
-			}
-		}
-	}()
 
-	if err := c.Start(); err != nil {
-		pw.Close()
-		m.run.clear()
+		c := exec.Command("bash", "-c", ps.Cmd)
+		c.Env = env
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+		pr, pw := io.Pipe()
+		c.Stdout = pw
+		c.Stderr = pw
+
+		readerDone := make(chan struct{})
 		go func() {
-			if stepsProgram != nil {
-				stepsProgram.Send(stepDoneMsg{idx: idx, err: err})
+			defer close(readerDone)
+			sc := bufio.NewScanner(pr)
+			sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for sc.Scan() {
+				line := sc.Text()
+				if logFile != nil {
+					fmt.Fprintln(logFile, line)
+				}
+				sendToProgram(lineMsg{idx: idx, line: line})
 			}
 		}()
-		return
-	}
-	m.run.setCmd(c)
 
-	go func() {
-		err := c.Wait()
-		pw.Close() // el scanner termina y entrega lo pendiente
-		time.Sleep(30 * time.Millisecond)
-		m.run.clear()
-		if stepsProgram != nil {
-			stepsProgram.Send(stepDoneMsg{idx: idx, err: err})
+		if err := c.Start(); err != nil {
+			pw.Close()
+			<-readerDone
+			run.clear()
+			return stepDoneMsg{idx: idx, err: err}
 		}
-	}()
+		run.setCmd(c)
+
+		err = c.Wait()
+		pw.Close() // el scanner termina y entrega lo pendiente
+		<-readerDone
+		run.clear()
+		return stepDoneMsg{idx: idx, err: err}
+	}
 }
 
 func (m stepsModel) applyLine(msg lineMsg) (tea.Model, tea.Cmd) {
@@ -1019,8 +1104,9 @@ func (m stepsModel) logPath(idx int) string {
 	if slug == "" {
 		slug = "paso"
 	}
-	return filepath.Join(m.logDir, fmt.Sprintf("steps-%s-%02d-%s.log",
-		time.Now().Format("20060102-150405"), idx+1, slug))
+	// Nanosegundos + PID: dos ejecuciones simultaneas no comparten log.
+	return filepath.Join(m.logDir, fmt.Sprintf("steps-%s-%d-%02d-%s.log",
+		time.Now().Format("20060102-150405.000000000"), os.Getpid(), idx+1, slug))
 }
 
 // ---------------------------------------------------------------- vista
@@ -1078,7 +1164,9 @@ func (m stepsModel) rightPanelBox() lipgloss.Style {
 }
 
 func (m stepsModel) View() string {
-	if m.width == 0 || m.height == 0 {
+	// Terminales muy pequeñas o sin tamaño conocido: no se dibuja nada para
+	// evitar alturas negativas en los recortes.
+	if m.width < 4 || m.height < 5 {
 		return ""
 	}
 	// Margen defensivo: no escribir nunca en la ultima celda (esquina inferior
@@ -1089,9 +1177,12 @@ func (m stepsModel) View() string {
 		return normalizeView(m.viewHelp(), w, h)
 	}
 
-	bodyH := h - 2
-	leftW := clampInt(int(float64(w)*0.40), 28, 40)
-	rightW := w - leftW - 2
+	bodyH := maxInt(1, h-2)
+	leftW := clampInt(int(float64(w)*0.40), 20, 40)
+	if leftW > w-3 {
+		leftW = maxInt(1, w/3)
+	}
+	rightW := maxInt(1, w-leftW-2)
 
 	var right string
 	switch {
@@ -1119,6 +1210,12 @@ func (m stepsModel) View() string {
 
 // normalizeView garantiza exactamente h lineas y ancho <= w por linea.
 func normalizeView(s string, w, h int) string {
+	if w < 1 {
+		w = 1
+	}
+	if h < 0 {
+		h = 0
+	}
 	lines := strings.Split(s, "\n")
 	if len(lines) > h {
 		lines = lines[:h]
@@ -1134,7 +1231,7 @@ func normalizeView(s string, w, h int) string {
 
 func (m stepsModel) viewSteps(w, h int) string {
 	lines := make([]string, 0, h)
-	title := shorten(m.plan.Title)
+	title := m.plan.Title
 	if m.formActive && m.focusSteps {
 		title = "▸ " + title
 	}
@@ -1400,17 +1497,17 @@ func (m stepsModel) viewForm(w, h int) string {
 			}
 
 		case "key":
-			path := os.ExpandEnv(in.Path)
-			if strings.HasPrefix(path, "~/") {
-				if home, err := os.UserHomeDir(); err == nil {
-					path = filepath.Join(home, path[2:])
+			path := expandPath(in.Path)
+			data, ok := m.keyCache[in.Path]
+			if !ok {
+				if b, err := os.ReadFile(path); err == nil {
+					data = string(b)
 				}
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
+			if data == "" {
 				lines = append(lines, prefix+"  "+stFaint.Render(truncate("(sin generar: el paso de identidad no creo esta clave)", maxInt(0, innerW-4))))
 			} else {
-				text := strings.TrimRight(string(data), "\n")
+				text := strings.TrimRight(data, "\n")
 				ww := maxInt(8, innerW-4)
 				for _, kl := range strings.Split(text, "\n") {
 					for _, piece := range wrapLine(kl, ww) {
@@ -1551,14 +1648,14 @@ func (m stepsModel) viewFooter(w int) string {
 	}
 	if m.formActive {
 		hint := "[enter] siguiente · [shift+tab] anterior · [tab] pasos · [esc] cancelar"
-		if m.current >= 0 && m.plan.Steps[m.current].Optional {
+		if m.current >= 0 && m.current < len(m.plan.Steps) && m.plan.Steps[m.current].Optional {
 			hint = "[enter] siguiente · [shift+tab] anterior · [tab] pasos · [esc] omitir"
 		}
 		return lipgloss.NewStyle().MaxWidth(w).Render(
 			" " + stFootTxt.Render(truncate(hint, w-1)))
 	}
 
-	title := shorten(m.plan.Title)
+	title := m.plan.Title
 	var keys [][2]string
 	if m.finished && !m.showSteps {
 		title = "Logs: " + m.logDir
@@ -1609,8 +1706,8 @@ func (m stepsModel) viewHelp() string {
 		stFaint.Render("pulsa ? para volver"),
 	}, "\n"))
 
-	w, h := m.width-1, m.height-1
-	placed := lipgloss.Place(w, h-2, lipgloss.Center, lipgloss.Center, box)
+	w, h := maxInt(1, m.width-1), maxInt(1, m.height-1)
+	placed := lipgloss.Place(w, maxInt(0, h-2), lipgloss.Center, lipgloss.Center, box)
 	return lipgloss.JoinVertical(lipgloss.Left,
 		placed,
 		stRule.Render(strings.Repeat("─", w)),
@@ -1675,7 +1772,7 @@ func (m stepsModel) hasErrors() bool {
 
 func cmdSteps(args []string) int {
 	if len(args) == 0 || args[0] != "run" {
-		fmt.Fprintln(os.Stderr, `nui steps: uso: nui steps run --plan <archivo|-> [--log-dir DIR] [--plain] [--title T]`)
+		fmt.Fprintln(os.Stderr, `nui steps: uso: nui steps run --plan <archivo|-> [--log-dir DIR] [--plain] [--non-interactive] [--title T]`)
 		return 2
 	}
 	args = args[1:]
@@ -1683,6 +1780,7 @@ func cmdSteps(args []string) int {
 	planPath := "-"
 	logDir := os.Getenv("LOG_DIR")
 	plain := false
+	nonInteractive := false
 	title := ""
 
 	for i := 0; i < len(args); i++ {
@@ -1701,6 +1799,8 @@ func cmdSteps(args []string) int {
 			logDir = next()
 		case "--plain":
 			plain = true
+		case "--non-interactive":
+			nonInteractive = true
 		case "--title":
 			title = next()
 		default:
@@ -1711,7 +1811,8 @@ func cmdSteps(args []string) int {
 	if logDir == "" {
 		logDir = defaultLogDir()
 	}
-	_ = os.MkdirAll(logDir, 0o755)
+	_ = os.MkdirAll(logDir, 0o700)
+	_ = os.Chmod(logDir, 0o700)
 
 	p, err := loadPlan(planPath)
 	if err != nil {
@@ -1722,7 +1823,8 @@ func cmdSteps(args []string) int {
 		p.Title = title
 	}
 
-	in, out, tty := tuiIO()
+	in, out, tty, closer := tuiIO()
+	defer closer()
 	w, h := termSize(out)
 
 	stateDir, err := os.MkdirTemp("", "nui-steps-state-")
@@ -1732,22 +1834,27 @@ func cmdSteps(args []string) int {
 	}
 	defer os.RemoveAll(stateDir)
 
-	if plain || !tty || w < 64 || h < 14 {
+	if plain || nonInteractive || !tty || w < 64 || h < 14 {
 		return runPlanPlain(p, logDir, stateDir)
 	}
 
-	stepsProgram = nil
+	// SIGTERM/SIGHUP (kill, cierre de terminal) cancelan los pasos hijos.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+
+	stepsProgram.Store(nil)
 	m := newStepsModel(p, logDir)
 	m.stateDir = stateDir
+	m.ctx = ctx
 	prog := tea.NewProgram(m,
 		tea.WithInput(in),
 		tea.WithOutput(out),
 		tea.WithAltScreen(),
 	)
-	stepsProgram = prog
+	stepsProgram.Store(prog)
 
 	final, err := prog.Run()
-	stepsProgram = nil
+	stepsProgram.Store(nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nui steps:", err)
 		return 1
@@ -1763,7 +1870,16 @@ func cmdSteps(args []string) int {
 }
 
 // stepsProgram permite que los lectores envíen líneas al event loop.
-var stepsProgram *tea.Program
+// Se usa atomic.Pointer porque el runner escribe desde goroutines mientras
+// cmdSteps puede limpiarlo al terminar (antes era una carrera con nil).
+var stepsProgram atomic.Pointer[tea.Program]
+
+// sendToProgram entrega un mensaje si hay programa activo (no-op si no).
+func sendToProgram(msg tea.Msg) {
+	if p := stepsProgram.Load(); p != nil {
+		p.Send(msg)
+	}
+}
 
 func defaultLogDir() string {
 	home, err := os.UserHomeDir()
@@ -1777,6 +1893,10 @@ func defaultLogDir() string {
 func runPlanPlain(p plan, logDir, stateDir string) int {
 	oks, warns, errs := []string{}, []string{}, []string{}
 	start := time.Now()
+
+	// Ctrl+C / SIGTERM matan el grupo del paso actual (no deja apt/npm vivos).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	clearScreen()
 	fmt.Println(bannerBox(termWidth(), 0, []string{p.Title}))
@@ -1800,12 +1920,12 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 		if ps.Interactive {
 			c.Stdin = os.Stdin
 			c.Stdout, c.Stderr = os.Stdout, os.Stderr
-			err = c.Run()
+			err = runCmd(ctx, c)
 		} else {
 			pr, pw := io.Pipe()
 			c.Stdout, c.Stderr = pw, pw
 			logFile, _ := os.Create(filepath.Join(logDir,
-				fmt.Sprintf("steps-%s-%02d-%s.log", start.Format("20060102-150405"), i+1, slugify(ps.Title))))
+				fmt.Sprintf("steps-%s-%d-%02d-%s.log", start.Format("20060102-150405.000000000"), os.Getpid(), i+1, slugify(ps.Title))))
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
@@ -1831,14 +1951,18 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 					}
 				}
 			}()
-			if err = c.Start(); err == nil {
-				err = c.Wait()
-			}
+			err = runCmd(ctx, c)
 			pw.Close()
 			<-done
 			if logFile != nil {
 				logFile.Close()
 			}
+		}
+
+		if ctx.Err() != nil {
+			fmt.Println("[ERROR] interrumpido por el usuario")
+			errs = append(errs, ps.Title+": interrumpido")
+			break
 		}
 
 		if err != nil {
@@ -1915,12 +2039,7 @@ func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader
 			}
 		case "key":
 			fmt.Printf("\n%s\n", in.Prompt)
-			path := os.ExpandEnv(in.Path)
-			if strings.HasPrefix(path, "~/") {
-				if home, err := os.UserHomeDir(); err == nil {
-					path = filepath.Join(home, path[2:])
-				}
-			}
+			path := expandPath(in.Path)
 			if data, err := os.ReadFile(path); err == nil {
 				fmt.Print(string(data))
 			} else {
@@ -2017,7 +2136,16 @@ func errText(err error) string {
 	return err.Error()
 }
 
-func shorten(s string) string { return s }
+// expandPath expande ~ y variables de entorno en rutas del plan.
+func expandPath(p string) string {
+	p = os.ExpandEnv(p)
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
 
 func slugify(s string) string {
 	var b strings.Builder

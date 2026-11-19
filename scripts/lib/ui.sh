@@ -8,13 +8,47 @@ export VERBOSE="${VERBOSE:-0}"
 export UI_APP_TITLE="${UI_APP_TITLE:-AGENTS ENVIRONMENT}"
 export NUI_BASE_URL="${NUI_BASE_URL:-https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main}"
 
-UI_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+# Helpers de dotfiles (respaldos, escritura atomica, PATH persistente).
+if [ -n "${REPO_DIR:-}" ] && [ -f "$REPO_DIR/scripts/lib/dotfiles.sh" ]; then
+  # shellcheck source=lib/dotfiles.sh
+  . "$REPO_DIR/scripts/lib/dotfiles.sh"
+fi
+
+# Solo Linux y WSL estan soportados. En macOS/Windows se avisa y se aborta
+# antes de tocar nada (ver docs/PLATFORMS.md).
+if command -v dotfiles_platform >/dev/null 2>&1; then
+  UI_PLATFORM="$(dotfiles_platform)"
+else
+  case "$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')" in
+    linux) UI_PLATFORM=linux ;;
+    darwin) UI_PLATFORM=darwin ;;
+    mingw*|msys*|cygwin*) UI_PLATFORM=windows ;;
+    *) UI_PLATFORM=unknown ;;
+  esac
+fi
+
+case "$UI_PLATFORM" in
+  linux) UI_OS=linux ;;
+  wsl) UI_OS=linux ;;
+  darwin) UI_OS=darwin ;;
+  *) UI_OS=unsupported ;;
+esac
 UI_ARCH="$(uname -m)"
 case "$UI_ARCH" in
   x86_64|amd64) UI_ARCH=amd64 ;;
   aarch64|arm64) UI_ARCH=arm64 ;;
   *) UI_ARCH=amd64 ;;
 esac
+export UI_PLATFORM UI_OS UI_ARCH
+
+# Modos globales: NUI_NONINTERACTIVE=1 evita cualquier prompt; NUI_NO_COLOR=1
+# desactiva color; NUI_DRY_RUN=1 imprime el plan sin ejecutarlo.
+export NUI_NONINTERACTIVE="${NUI_NONINTERACTIVE:-0}"
+export NUI_NO_COLOR="${NUI_NO_COLOR:-0}"
+export NUI_DRY_RUN="${NUI_DRY_RUN:-0}"
+export NO_COLOR="${NO_COLOR:-}"
+if [ "$NUI_NO_COLOR" = "1" ]; then export NO_COLOR=1; fi
+export CLICOLOR="${CLICOLOR:-}"
 
 # --- reporte final (pasos instalados / avisos / errores) -----------------
 REPORT_OK=()
@@ -28,14 +62,15 @@ report_info() { REPORT_INFO+=("$*"); }
 
 ensure_log_dir() {
   mkdir -p "$LOG_DIR" 2>/dev/null || true
+  chmod 700 "$LOG_DIR" 2>/dev/null || true
 }
 
 # --- binario nui ---------------------------------------------------------
 ui_bin() {
-  if [ -n "${UI_BIN:-}" ]; then printf '%s' "$UI_BIN"; return 0; fi
+  if [ -n "${UI_BIN:-}" ] && [ -x "$UI_BIN" ]; then printf '%s' "$UI_BIN"; return 0; fi
   if command -v nui >/dev/null 2>&1; then command -v nui; return 0; fi
   if [ -x "$HOME/.local/bin/nui" ]; then printf '%s' "$HOME/.local/bin/nui"; return 0; fi
-  if [ -n "${REPO_DIR:-}" ] && [ -x "$REPO_DIR/bin/nui-$UI_OS-$UI_ARCH" ]; then
+  if [ -n "${REPO_DIR:-}" ] && [ "$UI_OS" != "unsupported" ] && [ -x "$REPO_DIR/bin/nui-$UI_OS-$UI_ARCH" ]; then
     printf '%s' "$REPO_DIR/bin/nui-$UI_OS-$UI_ARCH"
     return 0
   fi
@@ -54,6 +89,12 @@ ui_install_ui() {
   local dest="$HOME/.local/bin/nui"
   local localgz="${REPO_DIR:-}/bin/nui-$UI_OS-$UI_ARCH.gz"
   local want="${NUI_VERSION:-}" have=""
+  local sums="" expect=""
+
+  if [ "$UI_OS" = "unsupported" ]; then
+    ui_error "Plataforma $UI_PLATFORM no soportada por nui (solo Linux/WSL; ver docs/PLATFORMS.md)"
+    return 1
+  fi
 
   if [ -z "$want" ] && [ -n "${REPO_DIR:-}" ] && [ -f "$REPO_DIR/bin/VERSION" ]; then
     want="$(cat "$REPO_DIR/bin/VERSION" 2>/dev/null || true)"
@@ -65,10 +106,15 @@ ui_install_ui() {
     fi
   fi
   if [ -z "$want" ] && command -v curl >/dev/null 2>&1; then
-    want="$(curl -fsSL --max-time 10 "$NUI_BASE_URL/bin/VERSION" 2>/dev/null || true)"
+    want="$(curl -fsSL --retry 3 --max-time 10 "$NUI_BASE_URL/bin/VERSION" 2>/dev/null || true)"
     if ui_have && [ -n "$want" ] && [ "$have" = "$want" ]; then
       return 0
     fi
+  fi
+
+  # Checksum publicado junto a los binarios (opcional pero recomendado).
+  if [ -n "${REPO_DIR:-}" ] && [ -f "$REPO_DIR/bin/SHA256SUMS" ]; then
+    sums="$REPO_DIR/bin/SHA256SUMS"
   fi
 
   # Importante: no usar ui_logged (spinner de nui) ni escribir directamente
@@ -79,6 +125,14 @@ ui_install_ui() {
   ui_info "Instalando nui${want:+ $want}..."
 
   if [ -f "$localgz" ]; then
+    if [ -n "$sums" ]; then
+      expect="$(awk -v f="$(basename "$localgz")" '$2 == f || $2 == "*"f {print $1; exit}' "$sums" 2>/dev/null || true)"
+      if [ -n "$expect" ] && ! dotfiles_verify_sha256 "$localgz" "$expect" "$(basename "$localgz")"; then
+        rm -f "$tmp"
+        ui_error "Checksum invalido para $(basename "$localgz"); instalacion abortada"
+        return 1
+      fi
+    fi
     # repo local: instalar sin red
     if ! gzip -dc "$localgz" > "$tmp" 2>/dev/null; then
       rm -f "$tmp"
@@ -89,10 +143,28 @@ ui_install_ui() {
     ui_ensure_cmd curl curl || { rm -f "$tmp"; return 1; }
     ui_ensure_cmd gzip gzip || { rm -f "$tmp"; return 1; }
     local url="$NUI_BASE_URL/bin/nui-$UI_OS-$UI_ARCH.gz"
-    if ! curl -fsSL "$url" -o "$tmp.gz" 2>/dev/null; then
+    if ! curl -fsSL --retry 3 --max-time 120 "$url" -o "$tmp.gz" 2>/dev/null; then
       rm -f "$tmp" "$tmp.gz"
       ui_error "No se pudo descargar nui desde $url"
       return 1
+    fi
+    if [ -n "$sums" ]; then
+      expect="$(awk -v f="$(basename "$url")" '$2 == f || $2 == "*"f {print $1; exit}' "$sums" 2>/dev/null || true)"
+      if [ -n "$expect" ] && ! dotfiles_verify_sha256 "$tmp.gz" "$expect" "$(basename "$url")"; then
+        rm -f "$tmp" "$tmp.gz"
+        ui_error "Checksum invalido para $(basename "$url"); instalacion abortada"
+        return 1
+      fi
+    elif command -v curl >/dev/null 2>&1; then
+      sums="$(curl -fsSL --retry 2 --max-time 10 "$NUI_BASE_URL/bin/SHA256SUMS" 2>/dev/null || true)"
+      if [ -n "$sums" ]; then
+        expect="$(printf '%s\n' "$sums" | awk -v f="$(basename "$url")" '$2 == f || $2 == "*"f {print $1; exit}')"
+        if [ -n "$expect" ] && ! dotfiles_verify_sha256 "$tmp.gz" "$expect" "$(basename "$url")"; then
+          rm -f "$tmp" "$tmp.gz"
+          ui_error "Checksum invalido para $(basename "$url"); instalacion abortada"
+          return 1
+        fi
+      fi
     fi
     if ! gzip -dc "$tmp.gz" > "$tmp" 2>/dev/null; then
       rm -f "$tmp" "$tmp.gz"
@@ -234,14 +306,26 @@ ui_dim() {
 }
 
 # --- interaccion ---------------------------------------------------------
+# Lee de /dev/tty cuando stdin viene de un pipe (curl | bash) y no estamos en
+# modo no interactivo.
+_ui_read() {
+  [ "${NUI_NONINTERACTIVE:-0}" = "1" ] && return 1
+  if [ -t 0 ] || [ ! -r /dev/tty ]; then
+    read "$@"
+  else
+    read "$@" < /dev/tty
+  fi
+}
+
 ui_ask() {
+  if [ "${NUI_NONINTERACTIVE:-0}" = "1" ]; then return 1; fi
   if ui_have; then
     "$(ui_bin)" confirm "$*"
     return $?
   fi
-  if [ -t 0 ]; then
+  if [ -t 0 ] || [ -r /dev/tty ]; then
     local a
-    read -rp "$* [y/N]: " a
+    _ui_read -rp "$* [y/N]: " a || return 1
     [[ "${a,,}" == y* ]]
     return
   fi
@@ -249,13 +333,17 @@ ui_ask() {
 }
 
 ui_input() {
+  if [ "${NUI_NONINTERACTIVE:-0}" = "1" ]; then
+    printf '%s' "${UI_INPUT_DEFAULT:-}"
+    return 0
+  fi
   if ui_have; then
     "$(ui_bin)" input --prompt "$1 " --placeholder "${2:-}"
     return $?
   fi
-  if [ -t 0 ]; then
+  if [ -t 0 ] || [ -r /dev/tty ]; then
     local v
-    read -rp "$1 " v
+    _ui_read -rp "$1 " v || return 1
     printf '%s' "$v"
     return 0
   fi
@@ -265,14 +353,15 @@ ui_input() {
 ui_choose() {
   local prompt="$1"
   shift
+  if [ "${NUI_NONINTERACTIVE:-0}" = "1" ]; then return 0; fi
   if ui_have; then
     "$(ui_bin)" choose --no-limit --height 12 --header "$prompt" -- "$@" || true
     return 0
   fi
-  if [ -t 0 ]; then
+  if [ -t 0 ] || [ -r /dev/tty ]; then
     printf '%s\n' "$@"
     local sel
-    read -rp "Escribe separados por espacio (o Enter para omitir): " sel
+    _ui_read -rp "Escribe separados por espacio (o Enter para omitir): " sel || return 0
     printf '%s\n' $sel
   fi
 }
@@ -306,11 +395,20 @@ ui_summary() {
 }
 
 # --- comandos con log ----------------------------------------------------
+# Prefijo de timeout portable (GNU coreutils en Linux/WSL).
+_ui_timeout_prefix() {
+  local t="${NUI_CMD_TIMEOUT:-600}"
+  case "$t" in ''|*[!0-9]*|0) return 0 ;; esac
+  command -v timeout >/dev/null 2>&1 && printf 'timeout %s ' "$t"
+  return 0
+}
+
 ui_logged() {
   local title="$1" cmd="$2"
-  local log
+  local log prefix
   ensure_log_dir
   log="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-$$.log"
+  prefix="$(_ui_timeout_prefix)"
 
   if [ "${VERBOSE:-0}" = "1" ]; then
     eval "$cmd"
@@ -318,14 +416,14 @@ ui_logged() {
   fi
 
   if ui_have; then
-    if "$(ui_bin)" spin --title "$title" -- bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
+    if "$(ui_bin)" spin --title "$title" -- bash -c "${prefix}eval \"\$1\" >\"\$2\" 2>&1" _ "$cmd" "$log"; then
       return 0
     fi
     ui_tail_error "$title" "$log"
     return 1
   fi
 
-  if bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
+  if bash -c "${prefix}eval \"\$1\" >\"\$2\" 2>&1" _ "$cmd" "$log"; then
     return 0
   fi
   ui_tail_error "$title" "$log"
@@ -333,18 +431,48 @@ ui_logged() {
 }
 
 # --- dependencias --------------------------------------------------------
-ui_apt_prefix() {
+ui_root_prefix() {
   if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
     printf 'sudo '
   fi
 }
+# Compatibilidad con scripts existentes.
+ui_apt_prefix() { ui_root_prefix; }
+
+ui_pkg_manager() {
+  local m
+  for m in apt-get dnf pacman zypper apk; do
+    if command -v "$m" >/dev/null 2>&1; then printf '%s' "$m"; return 0; fi
+  done
+  return 1
+}
+
+# ui_pkg_install_cmd <paquete...>: imprime el comando de instalacion.
+ui_pkg_install_cmd() {
+  local mgr prefix
+  mgr="$(ui_pkg_manager)" || return 1
+  prefix="$(ui_root_prefix)"
+  case "$mgr" in
+    apt-get)
+      printf '%sapt-get update >/dev/null 2>&1 || true; %sapt-get install -y --no-install-recommends %s' \
+        "$prefix" "$prefix" "$*"
+      ;;
+    dnf) printf '%sdnf install -y %s' "$prefix" "$*" ;;
+    pacman) printf '%spacman -S --noconfirm %s' "$prefix" "$*" ;;
+    zypper) printf '%szypper --non-interactive install %s' "$prefix" "$*" ;;
+    apk) printf '%sapk add --no-cache %s' "$prefix" "$*" ;;
+    *) return 1 ;;
+  esac
+}
 
 ui_ensure_cmd() {
-  local cmd="$1" pkg="${2:-$1}"
+  local cmd="$1" pkg="${2:-$1}" install_cmd
   command -v "$cmd" >/dev/null 2>&1 && return 0
-  local apt_prefix
-  apt_prefix="$(ui_apt_prefix)"
-  ui_logged "Instalando $pkg..." "${apt_prefix}apt-get update >/dev/null 2>&1 || true; ${apt_prefix}apt-get install -y $pkg >/dev/null 2>&1"
+  install_cmd="$(ui_pkg_install_cmd "$pkg")" || {
+    ui_warn "No hay gestor de paquetes conocido para instalar $pkg"
+    return 1
+  }
+  ui_logged "Instalando $pkg..." "$install_cmd"
 }
 
 # --- SSH sin prompts -----------------------------------------------------
@@ -393,7 +521,11 @@ ui_copy_clip() { # stdin -> portapapeles; 0 si se copio
   # OSC 52: el propio terminal copia (Windows Terminal, kitty, alacritty...).
   # Se escribe a /dev/tty porque el stdout del paso lo consume el panel.
   if [ -c /dev/tty ] && : 2>/dev/null < /dev/tty; then
-    printf '\033]52;c;%s\a' "$(printf '%s\n' "$data" | base64 -w0 2>/dev/null)" 2>/dev/null > /dev/tty && return 0
+    local b64
+    b64="$(printf '%s\n' "$data" | base64 2>/dev/null | tr -d '\n')"
+    if [ -n "$b64" ] && printf '\033]52;c;%s\a' "$b64" 2>/dev/null > /dev/tty; then
+      return 0
+    fi
   fi
   return 1
 }
@@ -407,6 +539,8 @@ ui_open_url() { # abre una URL con herramientas Linux; 0 si hay herramienta
   if command -v gio >/dev/null 2>&1 && gio open "$url" >/dev/null 2>&1; then
     return 0
   fi
+  # Fallback exclusivo de WSL (wslu): en Linux puro nunca existe; se conserva
+  # documentado para no romper el entorno actual montado sobre WSL.
   if command -v wslview >/dev/null 2>&1 && wslview "$url" >/dev/null 2>&1; then
     return 0
   fi
@@ -487,6 +621,8 @@ PANEL_STATE_DIR=""
 
 json_escape() {
   local s="$1"
+  # Elimina controles no imprimibles (JSON invalido si se cuelan).
+  s="$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')"
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
   s="${s//$'\t'/\\t}"
@@ -647,12 +783,24 @@ ui_panel_step() {
     esac
     shift
   done
+  case "$estimate" in ''|*[!0-9]*) estimate=0 ;; esac
+  # --only: filtra por titulo. No resuelve dependencias entre pasos.
+  if [ -n "${NUI_ONLY:-}" ]; then
+    case "$title" in
+      *"$NUI_ONLY"*) ;;
+      *) return 0 ;;
+    esac
+  fi
   [ -n "$PANEL_DIR" ] || ui_panel_begin
 
   local n=$(( ${#PANEL_STEPS[@]} + 1 ))
   local file="$PANEL_DIR/step-$n.sh"
   {
     printf 'set -euo pipefail\n'
+    # PATH persistido por pasos anteriores (nvm, opencode, herdr...).
+    if [ -n "${NUI_ENV_FILE:-}" ]; then
+      printf '[ -f %q ] && . %q || true\n' "$NUI_ENV_FILE" "$NUI_ENV_FILE"
+    fi
     cat
   } > "$file"
 
@@ -745,16 +893,16 @@ _ui_panel_prompt_inputs() {
     val="$default"
     case "$type" in
       input)
-        read -rp "$(printf '%s [%s]: ' "$prompt" "$default")" val || true
+        _ui_read -rp "$(printf '%s [%s]: ' "$prompt" "$default")" val || true
         ;;
       password)
-        read -rsp "$(printf '%s: ' "$prompt")" val || true
+        _ui_read -rsp "$(printf '%s: ' "$prompt")" val || true
         printf '\n'
         ;;
       confirm)
         yesno=n
         [ "$default" = "true" ] && yesno=s
-        read -rp "$(printf '%s [s/n] (%s): ' "$prompt" "$yesno")" val || true
+        _ui_read -rp "$(printf '%s [s/n] (%s): ' "$prompt" "$yesno")" val || true
         if [ -z "$val" ]; then val="$default"; else
           case "${val,,}" in
             s|si|sí|y|yes|true) val=true ;;
@@ -765,14 +913,14 @@ _ui_panel_prompt_inputs() {
       key)
         printf '\n%s\n' "$prompt"
         cat "$options" 2>/dev/null || printf '(no se pudo leer %s)\n' "$options"
-        read -rp "Pulsa enter para continuar... " || true
+        _ui_read -rp "Pulsa enter para continuar... " || true
         ;;
       select)
         printf '\n%s\n' "$prompt"
         opts=()
         IFS=$'\x1e' read -ra opts <<< "$options"
         for i in "${!opts[@]}"; do printf '  %2d) %s\n' "$((i + 1))" "${opts[$i]}"; done
-        read -rp "Seleccion (numeros separados por espacio): " sel || true
+        _ui_read -rp "Seleccion (numeros separados por espacio): " sel || true
         val=""
         for n in $sel; do
           idxopt=$((n - 1))
@@ -829,14 +977,19 @@ _ui_panel_run_plain() {
     export NUI_STEP_RESULT="$result"
 
     if [ "$intr" = "1" ]; then
+      if [ "${NUI_NONINTERACTIVE:-0}" = "1" ]; then
+        printf '[WARN] paso interactivo omitido en modo no interactivo\n'
+        report_warn "$t: interactivo omitido (modo no interactivo)"
+        continue
+      fi
       if [ -e /dev/tty ] && [ -r /dev/tty ]; then
         bash "$path" < /dev/tty
       else
-        bash "$path"
+        bash "$path" </dev/null
       fi
       rc=$?
     else
-      bash "$path" 2>&1 | _ui_panel_filter "$log"
+      bash "$path" </dev/null 2>&1 | _ui_panel_filter "$log"
       rc=${PIPESTATUS[0]}
     fi
 
@@ -881,6 +1034,7 @@ _ui_panel_plan_json() {
 
     while IFS='|' read -r b64t opt intr est path b64in; do
       [ -n "$path" ] || continue
+      case "$est" in ''|*[!0-9]*) est=0 ;; esac
       t="$(printf '%s' "$b64t" | base64 -d)"
       [ "$first_step" = "0" ] && printf ','
       first_step=0
@@ -946,12 +1100,19 @@ _ui_panel_plan_json() {
 }
 
 # ui_panel_run [--title T] [--plain]: ejecuta el plan y muestra el reporte.
+_ui_panel_cleanup() {
+  [ -n "${PANEL_DIR:-}" ] && rm -rf "$PANEL_DIR" 2>/dev/null || true
+  [ -n "${PANEL_STATE_DIR:-}" ] && rm -rf "$PANEL_STATE_DIR" 2>/dev/null || true
+  dotfiles_cleanup_run 2>/dev/null || true
+}
+
 ui_panel_run() {
   local title="${UI_APP_TITLE:-INSTALACIÓN}" plain=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) shift; title="${1:-$title}" ;;
       --plain) plain=1 ;;
+      --dry-run) NUI_DRY_RUN=1; export NUI_DRY_RUN ;;
       *) ui_warn "ui_panel_run: opcion desconocida: $1" ;;
     esac
     shift
@@ -976,23 +1137,34 @@ ui_panel_run() {
     return 1
   fi
 
-  if [ "${PLAN_ONLY:-0}" = "1" ]; then
+  if [ "${PLAN_ONLY:-0}" = "1" ] || [ "${NUI_DRY_RUN:-0}" = "1" ]; then
+    if [ "${NUI_DRY_RUN:-0}" = "1" ]; then
+      printf '== DRY RUN: no se ejecutara nada ==\n'
+    fi
     cat "$plan"
     if [ "${PLAN_KEEP:-0}" != "1" ]; then
       rm -rf "$PANEL_DIR" "$PANEL_STATE_DIR"
       PANEL_DIR=""
+      PANEL_STATE_DIR=""
       PANEL_STEPS=()
       PANEL_NOTES=()
     fi
     return 0
   fi
 
+  # Limpieza garantizada ante Ctrl+C/SIGTERM: no dejar temporales ni procesos
+  # hijos con el lock de apt.
+  trap '_ui_panel_cleanup; exit 130' INT TERM HUP
+  trap '_ui_panel_cleanup' EXIT
+
   local rc=0 verbose_plain="$plain"
   [ "${VERBOSE:-0}" = "1" ] && verbose_plain=1
+  [ "${NUI_NONINTERACTIVE:-0}" = "1" ] && verbose_plain=1
 
   if ui_have && ui_interactive && ui_supports_steps; then
     local extra=()
     [ "$verbose_plain" = "1" ] && extra+=(--plain)
+    [ "${NUI_NONINTERACTIVE:-0}" = "1" ] && extra+=(--non-interactive)
     if "$(ui_bin)" steps run --plan "$plan" --log-dir "$LOG_DIR" --title "$title" \
         ${extra[@]+"${extra[@]}"}; then
       rc=0
@@ -1007,8 +1179,10 @@ ui_panel_run() {
     fi
   fi
 
+  trap - INT TERM HUP EXIT
   rm -rf "$PANEL_DIR" "$PANEL_STATE_DIR"
   PANEL_DIR=""
+  PANEL_STATE_DIR=""
   PANEL_STEPS=()
   PANEL_NOTES=()
   return "$rc"

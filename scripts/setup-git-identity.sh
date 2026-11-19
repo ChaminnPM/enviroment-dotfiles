@@ -29,6 +29,8 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 # shellcheck source=lib/ui.sh
 source "$REPO_DIR/scripts/lib/ui.sh"
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
 ensure_log_dir
 
 PANEL_MODE=0
@@ -42,12 +44,32 @@ say() {
   if [ "$PANEL_MODE" = "1" ]; then printf '##log %s\n' "$*"; else printf '%s\n' "$*"; fi
 }
 
+# Las identidades se escriben en ~/.gitconfig y se pasan a ssh-keygen como
+# argumentos (nunca dentro de `bash -c`). Aun asi se rechazan caracteres de
+# control y corchetes para que no puedan inyectar secciones de git config.
+valid_identity() {
+  local label="$1" value="$2"
+  if printf '%s' "$value" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    say "$label contiene caracteres de control; valor rechazado"
+    return 1
+  fi
+  case "$value" in
+    *'['*|*']'*)
+      say "$label contiene '[' o ']'; valor rechazado"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 _ask() {
   local prompt="$1" env_name="$2" default="${3:-}" value=""
   if [ "$PANEL_MODE" = "1" ]; then
     value="${!env_name:-}"
   elif [ -n "${!env_name:-}" ]; then
     value="${!env_name}"
+  elif [ "${NUI_NONINTERACTIVE:-0}" = "1" ]; then
+    value=""
   elif ui_interactive; then
     if ui_have; then
       value="$(ui_input "$prompt" "$default")" || value=""
@@ -85,14 +107,15 @@ platform_host() {
 }
 
 run_cmd() {
-  # run_cmd <comando>: en panel emite ##log y guarda el log; standalone directo.
+  # run_cmd <comando> [args...]: en panel emite el log; standalone directo.
+  # No usa `bash -c`: los valores del usuario viajan como argumentos.
   if [ "$PANEL_MODE" = "1" ]; then
     local log="$LOG_DIR/identity-$(date +%Y%m%d-%H%M%S)-$$.log"
-    if bash -c "$1" >"$log" 2>&1 </dev/null; then return 0; fi
+    if "$@" >"$log" 2>&1 </dev/null; then return 0; fi
     tail -n 5 "$log" 2>/dev/null | while IFS= read -r l; do say "$l"; done
     return 1
   fi
-  bash -c "$1"
+  "$@"
 }
 
 mkdir -p "$HOME/.ssh" "$HOME/.config"
@@ -112,6 +135,8 @@ if [ -z "$P_NAME" ] || [ -z "$P_EMAIL" ]; then
   say "Identidad personal omitida (nombre/email vacíos)."
   exit 0
 fi
+valid_identity "Nombre personal" "$P_NAME" || exit 1
+valid_identity "Email personal" "$P_EMAIL" || exit 1
 
 # --- cuentas opcionales (0-3) -----------------------------------------------
 ACC_SLUG=(); ACC_ESPACIO=(); ACC_PLATFORM=(); ACC_NAME=(); ACC_EMAIL=(); ACC_FOLDER=()
@@ -121,6 +146,8 @@ add_account() { # <espacio> <plataforma> <nombre> <email>
   local esp="$1" plt nam="$3" eml="$4" slug folder rfolder rf
   local n idx bad
   case "$esp" in ''|.*|*/*) say "Espacio invalido ('$esp'); cuenta omitida"; return 1 ;; esac
+  valid_identity "Nombre de la cuenta '$esp'" "$nam" || return 1
+  valid_identity "Email de la cuenta '$esp'" "$eml" || return 1
   plt="$(norm_platform "$2")"
   slug="$(slugify "$esp")"
   if [ -z "$slug" ]; then
@@ -135,9 +162,9 @@ add_account() { # <espacio> <plataforma> <nombre> <email>
     fi
   done
   folder="$HOME/$esp"
-  rfolder="$(realpath -m "$folder")"
+  rfolder="$(dotfiles_realpath "$folder")"
   for ((idx = 0; idx < n; idx++)); do
-    rf="$(realpath -m "${ACC_FOLDER[$idx]}")"
+    rf="$(dotfiles_realpath "${ACC_FOLDER[$idx]}")"
     case "$rfolder/" in "$rf"/*)
       say "La carpeta '$esp' esta dentro de otra cuenta; cuenta omitida"; return 1 ;;
     esac
@@ -206,23 +233,37 @@ while [ "$i" -le "$count" ]; do
 done
 
 # --- claves SSH -------------------------------------------------------------
+add_to_agent() {
+  local key="$1"
+  [ -n "${SSH_AUTH_SOCK:-}" ] || return 0
+  command -v ssh-add >/dev/null 2>&1 || return 0
+  ssh-add "$key" >/dev/null 2>&1 || say "No se pudo agregar $key al ssh-agent"
+}
+
 if [ ! -f "$HOME/.ssh/id_ed25519_personal" ]; then
   say "Generando clave personal..."
-  run_cmd "ssh-keygen -t ed25519 -C '$P_EMAIL' -f '$HOME/.ssh/id_ed25519_personal' -N '' >/dev/null 2>&1" || {
+  if ! run_cmd ssh-keygen -t ed25519 -C "$P_EMAIL" -f "$HOME/.ssh/id_ed25519_personal" -N ''; then
     say "No se pudo generar la clave personal."
     exit 1
-  }
+  fi
 fi
+chmod 600 "$HOME/.ssh/id_ed25519_personal" 2>/dev/null || true
+chmod 644 "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null || true
+add_to_agent "$HOME/.ssh/id_ed25519_personal"
 
 for idx in $(ok_indices); do
   key="$HOME/.ssh/id_ed25519_${ACC_SLUG[$idx]}"
   if [ ! -f "$key" ]; then
     say "Generando clave ${ACC_ESPACIO[$idx]}..."
-    if ! run_cmd "ssh-keygen -t ed25519 -C '${ACC_EMAIL[$idx]}' -f '$key' -N '' >/dev/null 2>&1"; then
+    if ! run_cmd ssh-keygen -t ed25519 -C "${ACC_EMAIL[$idx]}" -f "$key" -N ''; then
       say "No se pudo generar la clave ${ACC_ESPACIO[$idx]}; cuenta desactivada"
       ACC_FAIL+=("${ACC_SLUG[$idx]}")
+      continue
     fi
   fi
+  chmod 600 "$key" 2>/dev/null || true
+  chmod 644 "$key.pub" 2>/dev/null || true
+  add_to_agent "$key"
 done
 
 # --- migracion del esquema viejo --------------------------------------------
@@ -237,9 +278,21 @@ if [ -d "$LEGACY_DIR" ] && [ -n "$(ls -A "$LEGACY_DIR" 2>/dev/null)" ]; then
   legacy_content=1
 fi
 
-if [ "${#ACC_SLUG[@]}" -eq 1 ] && [ "$legacy_content" = "1" ]; then
+MIGRATE_LEGACY="${GIT_MIGRATE_LEGACY:-0}"
+if [ "${#ACC_SLUG[@]}" -eq 1 ] && [ "$legacy_content" = "1" ] && [ "$MIGRATE_LEGACY" != "1" ]; then
+  if [ "$PANEL_MODE" != "1" ] && [ "${NUI_NONINTERACTIVE:-0}" != "1" ] && ui_interactive; then
+    if ui_ask "Mover el contenido de $LEGACY_DIR a ${ACC_FOLDER[0]}?"; then
+      MIGRATE_LEGACY=1
+    fi
+  fi
+  if [ "$MIGRATE_LEGACY" != "1" ]; then
+    say "Migracion omitida: $LEGACY_DIR conserva su contenido (usa GIT_MIGRATE_LEGACY=1 para moverlo)"
+  fi
+fi
+
+if [ "${#ACC_SLUG[@]}" -eq 1 ] && [ "$legacy_content" = "1" ] && [ "$MIGRATE_LEGACY" = "1" ]; then
   target="${ACC_FOLDER[0]}"
-  if [ "$(realpath -m "$target")" = "$(realpath -m "$LEGACY_DIR")" ]; then
+  if [ "$(dotfiles_realpath "$target")" = "$(dotfiles_realpath "$LEGACY_DIR")" ]; then
     say "Migracion: la carpeta del espacio ya es $LEGACY_DIR; no se mueve nada"
   else
     mkdir -p "$target"
@@ -260,9 +313,11 @@ elif [ "$legacy_include" = "1" ]; then
 fi
 
 # --- ~/.ssh/config (seccion gestionada) --------------------------------------
+ssh_header='# >>> dotfiles-managed (setup-git-identity.sh) - no editar entre los marcadores'
+ssh_footer='# <<< dotfiles-managed'
 ssh_tmp="$(mktemp)"
 {
-  printf '# >>> dotfiles-managed (setup-git-identity.sh) - no editar entre los marcadores\n'
+  # Solo el cuerpo: dotfiles_managed_block agrega los marcadores.
   if [ "$P_PLATFORM" = "bitbucket" ]; then
     printf 'Host bitbucket.org ssh.bitbucket.org\n    HostName ssh.bitbucket.org\n    User git\n    IdentityFile ~/.ssh/id_ed25519_personal\n    IdentitiesOnly yes\n'
   else
@@ -284,25 +339,39 @@ ssh_tmp="$(mktemp)"
     fi
     printf '    User git\n    IdentityFile ~/.ssh/id_ed25519_%s\n    IdentitiesOnly yes\n' "${ACC_SLUG[$idx]}"
   done
-  printf '# <<< dotfiles-managed\n'
 } > "$ssh_tmp"
 
 cfg="$HOME/.ssh/config"
-rest_tmp="$(mktemp)"
 if [ -f "$cfg" ]; then
-  # Conserva todo lo que este fuera del bloque gestionado anterior.
-  awk 'BEGIN{skip=0} /^# >>> dotfiles-managed/{skip=1; next} /^# <<< dotfiles-managed/{skip=0; next} skip==0{print}' "$cfg" \
-    | sed -e '/./,$!d' > "$rest_tmp" || true
-  if grep -qE '^Host (github\.com|bitbucket\.org|ssh\.bitbucket\.org)' "$rest_tmp" 2>/dev/null; then
+  # Aviso (sin tocar nada): hosts propios que quedan fuera del bloque.
+  rest_check="$(mktemp)"
+  awk -v b="$ssh_header" -v e="$ssh_footer" '
+    $0 == b { skip = 1; next }
+    $0 == e { skip = 0; next }
+    skip != 1 { print }
+  ' "$cfg" > "$rest_check" 2>/dev/null || true
+  if grep -qE '^Host (github\.com|bitbucket\.org|ssh\.bitbucket\.org)' "$rest_check" 2>/dev/null; then
     say "~/.ssh/config: bloques previos conservados fuera de la seccion gestionada (el bloque gestionado tiene prioridad)"
   fi
+  rm -f "$rest_check"
 fi
-{ cat "$ssh_tmp"; cat "$rest_tmp"; } > "$cfg"
-chmod 600 "$cfg"
-rm -f "$ssh_tmp" "$rest_tmp"
+dotfiles_backup "$cfg" || true
+if ! dotfiles_managed_block "$cfg" "$ssh_header" "$ssh_footer" prepend 600 < "$ssh_tmp"; then
+  say "No se modifico ~/.ssh/config (bloque gestionado incompleto)"
+fi
+chmod 600 "$cfg" 2>/dev/null || true
+rm -f "$ssh_tmp"
 
 # --- ~/.gitconfig (includes por carpeta) -------------------------------------
+# Solo se reemplaza el bloque gestionado: alias, core.editor, credential.helper
+# y cualquier otra configuracion del usuario fuera de los marcadores se conserva.
+gc_header='# >>> dotfiles-gitconfig (setup-git-identity.sh) - no editar'
+gc_footer='# <<< dotfiles-gitconfig'
+gc_tmp="$(mktemp)"
 {
+  # El tema vive en un include aparte para no perderse cuando este script
+  # regenera ~/.gitconfig en cada instalacion.
+  printf '[include]\n    path = %s/.config/git/theme.gitconfig\n' "$HOME"
   printf '[includeIf "gitdir:%s/"]\n    path = %s/.gitconfig-personal\n' "$HOME" "$HOME"
   if [ "$KEEP_LEGACY_INCLUDE" = "1" ]; then
     printf '[includeIf "gitdir:%s/Documents/Repositorios/"]\n    path = %s/.gitconfig-nuxiba\n' "$HOME" "$HOME"
@@ -310,7 +379,12 @@ rm -f "$ssh_tmp" "$rest_tmp"
   for idx in $(ok_indices); do
     printf '[includeIf "gitdir:%s/"]\n    path = %s/.gitconfig-%s\n' "${ACC_FOLDER[$idx]}" "$HOME" "${ACC_SLUG[$idx]}"
   done
-} > "$HOME/.gitconfig"
+} > "$gc_tmp"
+dotfiles_backup "$HOME/.gitconfig" || true
+if ! dotfiles_managed_block "$HOME/.gitconfig" "$gc_header" "$gc_footer" prepend 644 < "$gc_tmp"; then
+  say "No se modifico ~/.gitconfig (bloque gestionado incompleto)"
+fi
+rm -f "$gc_tmp"
 
 instead_block() { # <slug> <plataforma> -> bloque url.insteadOf del perfil
   case "$2" in
@@ -323,12 +397,31 @@ instead_block() { # <slug> <plataforma> -> bloque url.insteadOf del perfil
   esac
 }
 
+# Escribe user.name/user.email con `git config --file` (sin printf ni eval).
+write_user_profile() {
+  local file="$1" name="$2" email="$3" tmp
+  dotfiles_backup "$file" || return 1
+  tmp="$(mktemp)"
+  chmod 600 "$tmp"
+  if [ -f "$file" ]; then cp -p "$file" "$tmp" 2>/dev/null || true; fi
+  if command -v git >/dev/null 2>&1; then
+    dotfiles_git_set "$tmp" user.name "$name" || return 1
+    dotfiles_git_set "$tmp" user.email "$email" || return 1
+  else
+    printf '[user]\n    name = %s\n    email = %s\n' "$name" "$email" > "$tmp"
+  fi
+  dotfiles_atomic_write "$file" 600 < "$tmp"
+  rm -f "$tmp"
+}
+
 # Los perfiles no se pisan si ya existen: el email que el usuario ajusto a mano
 # no debe revertirse al relanzar la instalacion. A los existentes solo se les
 # agrega el bloque de enrutamiento SSH si no lo tienen.
 if [ ! -f "$HOME/.gitconfig-personal" ]; then
-  printf '[user]\n    name = %s\n    email = %s\n' "$P_NAME" "$P_EMAIL" > "$HOME/.gitconfig-personal"
+  write_user_profile "$HOME/.gitconfig-personal" "$P_NAME" "$P_EMAIL" \
+    || say "No se pudo escribir ~/.gitconfig-personal"
 else
+  chmod 600 "$HOME/.gitconfig-personal" 2>/dev/null || true
   say "~/.gitconfig-personal ya existe; se conserva"
 fi
 
@@ -337,13 +430,17 @@ for idx in $(ok_indices); do
   pf="$HOME/.gitconfig-$slug"
   block="$(instead_block "$slug" "${ACC_PLATFORM[$idx]}")"
   if [ ! -f "$pf" ]; then
-    { printf '[user]\n    name = %s\n    email = %s\n\n%s' "${ACC_NAME[$idx]}" "${ACC_EMAIL[$idx]}" "$block"; } > "$pf"
+    write_user_profile "$pf" "${ACC_NAME[$idx]}" "${ACC_EMAIL[$idx]}" \
+      || { say "No se pudo escribir $pf"; continue; }
+    printf '\n%s' "$block" >> "$pf"
   elif ! grep -qF "git-$slug:" "$pf"; then
+    dotfiles_backup "$pf" || true
     printf '\n%s' "$block" >> "$pf"
     say "Se agrego el enrutamiento SSH a $pf"
   else
     say "$pf ya existe; se conserva"
   fi
+  chmod 600 "$pf" 2>/dev/null || true
 done
 
 # --- manifiesto de cuentas ----------------------------------------------------
@@ -354,6 +451,7 @@ done
 slugs="${slugs# }"
 
 man="$HOME/.config/git-accounts.sh"
+man_tmp="$(mktemp)"
 {
   printf '# generado por setup-git-identity.sh - no editar a mano\n'
   printf 'PERSONAL_PLATFORM=%q\n' "$P_PLATFORM"
@@ -369,8 +467,10 @@ man="$HOME/.config/git-accounts.sh"
     printf 'ACC_%s_EMAIL=%q\n' "$u" "${ACC_EMAIL[$idx]}"
     printf 'ACC_%s_FOLDER=%q\n' "$u" "${ACC_FOLDER[$idx]}"
   done
-} > "$man"
-chmod 600 "$man"
+} > "$man_tmp"
+dotfiles_backup "$man" || true
+dotfiles_atomic_write "$man" 600 < "$man_tmp"
+rm -f "$man_tmp"
 
 # --- resumen + portapapeles ---------------------------------------------------
 gh_fp="$(ssh-keygen -lf "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null | awk '{print $2}' || echo '?')"
@@ -390,6 +490,7 @@ if ui_copy_clip < "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null; then
   fi
   copied=1
 else
+  claves_tmp="$(mktemp)"
   {
     printf '=== Personal/%s (pegar en %s)\n' "$P_PLATFORM" "$(platform_url "$P_PLATFORM")"
     cat "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null
@@ -398,7 +499,10 @@ else
       printf '=== %s/%s (pegar en %s)\n' "${ACC_ESPACIO[$idx]}" "${ACC_PLATFORM[$idx]}" "$(platform_url "${ACC_PLATFORM[$idx]}")"
       cat "$HOME/.ssh/id_ed25519_$slug.pub" 2>/dev/null
     done
-  } > "$HOME/claves-ssh.txt" 2>/dev/null || true
+  } > "$claves_tmp"
+  dotfiles_backup "$HOME/claves-ssh.txt" || true
+  dotfiles_atomic_write "$HOME/claves-ssh.txt" 600 < "$claves_tmp"
+  rm -f "$claves_tmp"
   if [ -f "$HOME/claves-ssh.txt" ]; then
     say "Sin portapapeles: todas las claves guardadas en ~/claves-ssh.txt"
   fi
@@ -422,7 +526,7 @@ ssh_check() {
   return 1
 }
 
-if [ "$PANEL_MODE" != "1" ] && ui_interactive && ui_ask "¿Probar la conexion SSH ahora?"; then
+if [ "$PANEL_MODE" != "1" ] && [ "${NUI_NONINTERACTIVE:-0}" != "1" ] && ui_interactive && ui_ask "¿Probar la conexion SSH ahora?"; then
   ssh_check "SSH personal ($P_PLATFORM)" "git@$(platform_host "$P_PLATFORM")" || true
   for idx in $(ok_indices); do
     ssh_check "SSH ${ACC_ESPACIO[$idx]}" "git@git-${ACC_SLUG[$idx]}" || true

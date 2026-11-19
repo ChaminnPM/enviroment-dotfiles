@@ -17,24 +17,26 @@ import (
 )
 
 // tuiIO resuelve entrada/salida interactiva.
-// - entrada: stdin si es TTY, si no /dev/tty
+// - entrada: stdin si es TTY, si no /dev/tty (se cierra con closer)
 // - salida: stderr si es TTY (stdout se reserva para resultados), si no stdout
-func tuiIO() (in *os.File, out *os.File, ok bool) {
+func tuiIO() (in *os.File, out *os.File, ok bool, closer func()) {
+	closer = func() {}
 	if isTTY(os.Stdin) {
 		in = os.Stdin
 	} else if f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
 		in = f
+		closer = func() { _ = f.Close() }
 	} else {
-		return nil, nil, false
+		return nil, nil, false, closer
 	}
 	if isTTY(os.Stderr) {
 		out = os.Stderr
 	} else if isTTY(os.Stdout) {
 		out = os.Stdout
 	} else {
-		return nil, nil, false
+		return nil, nil, false, closer
 	}
-	return in, out, true
+	return in, out, true, closer
 }
 
 func exitCode(err error) int {
@@ -157,7 +159,8 @@ func cmdSpin(args []string) {
 	}
 
 	c := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	in, out, ok := tuiIO()
+	in, out, ok, closer := tuiIO()
+	defer closer()
 	if !ok {
 		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 		os.Exit(exitCode(c.Run()))
@@ -191,6 +194,11 @@ func (m inputModel) Init() tea.Cmd { return nil }
 
 func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		if msg.Width > 0 && m.ti.Width > msg.Width-4 {
+			m.ti.Width = maxInt(10, msg.Width-4)
+		}
+		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc", "ctrl+c":
@@ -237,7 +245,8 @@ func cmdInput(args []string) {
 		}
 	}
 
-	in, out, ok := tuiIO()
+	in, out, ok, closer := tuiIO()
+	defer closer()
 	if !ok {
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		fmt.Print(strings.TrimRight(line, "\r\n"))
@@ -282,6 +291,8 @@ func (m confirmModel) Init() tea.Cmd { return nil }
 
 func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "left", "right", "tab", "shift+tab", "h", "l":
@@ -325,7 +336,8 @@ func cmdConfirm(args []string) {
 		question = "Continuar?"
 	}
 
-	in, out, ok := tuiIO()
+	in, out, ok, closer := tuiIO()
+	defer closer()
 	if !ok {
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		l := strings.ToLower(strings.TrimSpace(line))
@@ -364,6 +376,11 @@ func (m chooseModel) Init() tea.Cmd { return nil }
 
 func (m chooseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		if msg.Height > 0 && m.height > msg.Height-2 {
+			m.height = maxInt(3, msg.Height-2)
+		}
+		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
@@ -485,7 +502,8 @@ func cmdChoose(args []string) {
 		os.Exit(1)
 	}
 
-	in, out, ok := tuiIO()
+	in, out, ok, closer := tuiIO()
+	defer closer()
 	if !ok {
 		os.Exit(1)
 	}
