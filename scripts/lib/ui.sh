@@ -449,7 +449,8 @@ ui_logged_argv() {
   fi
 
   ensure_log_dir
-  local log="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-$$-argv.log"
+  local log
+  log="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-$$-argv.log"
   UI_LAST_LOG="$log"
   # Crear el log explicitamente con 0600: las redirecciones posteriores
   # reutilizan el archivo y conservan sus permisos (umask no reliably = 077).
@@ -559,8 +560,8 @@ ui_pkg_install_argv() {
 }
 
 ui_ensure_cmd() {
-  local cmd="$1" pkg="${2:-$1}"
-  command -v "$cmd" >/dev/null 2>&1 && return 0
+  local need_cmd="$1" pkg="${2:-$1}"
+  command -v "$need_cmd" >/dev/null 2>&1 && return 0
   if ! ui_pkg_install_argv "$pkg"; then
     ui_warn "No hay gestor de paquetes conocido para instalar $pkg"
     return 1
@@ -966,7 +967,8 @@ _ui_panel_filter() {
 _ui_panel_prompt_inputs() {
   local state="$1" idx="$2" b64="$3"
   [ -n "$b64" ] || return 0
-  local out="$state/result-$(printf '%02d' "$idx").env"
+  local out
+  out="$state/result-$(printf '%02d' "$idx").env"
   : > "$out"
   local fields
   fields="$(mktemp "${TMPDIR:-/tmp}/nui-inputs.XXXXXX")"

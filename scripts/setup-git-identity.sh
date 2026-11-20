@@ -110,7 +110,8 @@ run_cmd() {
   # run_cmd <comando> [args...]: en panel emite el log; standalone directo.
   # No usa `bash -c`: los valores del usuario viajan como argumentos.
   if [ "$PANEL_MODE" = "1" ]; then
-    local log="$LOG_DIR/identity-$(date +%Y%m%d-%H%M%S)-$$.log"
+    local log
+    log="$LOG_DIR/identity-$(date +%Y%m%d-%H%M%S)-$$.log"
     if "$@" >"$log" 2>&1 </dev/null; then return 0; fi
     tail -n 5 "$log" 2>/dev/null | while IFS= read -r l; do say "$l"; done
     return 1
@@ -351,7 +352,7 @@ if [ -f "$cfg" ]; then
     skip != 1 { print }
   ' "$cfg" > "$rest_check" 2>/dev/null || true
   if grep -qE '^Host (github\.com|bitbucket\.org|ssh\.bitbucket\.org)' "$rest_check" 2>/dev/null; then
-    say "~/.ssh/config: bloques previos conservados fuera de la seccion gestionada (el bloque gestionado tiene prioridad)"
+    say "$HOME/.ssh/config: bloques previos conservados fuera de la seccion gestionada (el bloque gestionado tiene prioridad)"
   fi
   rm -f "$rest_check"
 fi
@@ -422,7 +423,7 @@ if [ ! -f "$HOME/.gitconfig-personal" ]; then
     || say "No se pudo escribir ~/.gitconfig-personal"
 else
   chmod 600 "$HOME/.gitconfig-personal" 2>/dev/null || true
-  say "~/.gitconfig-personal ya existe; se conserva"
+  say "$HOME/.gitconfig-personal ya existe; se conserva"
 fi
 
 for idx in $(ok_indices); do

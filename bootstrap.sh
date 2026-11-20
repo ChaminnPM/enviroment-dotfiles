@@ -115,11 +115,10 @@ if [ -n "$PKG_MGR" ] && [ "$PKG_MGR" != "apt-get" ]; then
   unset _mapped _p
 fi
 
-# bash no puede exportar arrays: convertir a escalar antes de exportar.
+# bash no puede exportar arrays: publicar una copia escalar con otro nombre
+# (reasignar APT_PKGS a string despues de usarlo como array es un error).
 APT_PKGS_STR="${APT_PKGS[*]}"
-unset APT_PKGS
-APT_PKGS="$APT_PKGS_STR"
-export APT_PKGS
+export APT_PKGS_STR
 
 # --- plan de pasos -------------------------------------------------------
 ui_panel_begin
@@ -131,7 +130,7 @@ if [ -z "${APT_PREFIX:-}" ]; then
   echo "##log Sin sudo; apt se ejecutara como usuario actual"
   exit 0
 fi
-if [ -z "${APT_PKGS:-}" ]; then
+if [ -z "${APT_PKGS_STR:-}" ]; then
   echo "##log No hay paquetes pendientes"
   exit 0
 fi
@@ -187,40 +186,40 @@ pkg_run() {
   return "$rc"
 }
 
-if [ -n "${APT_PKGS:-}" ]; then
+if [ -n "${APT_PKGS_STR:-}" ]; then
   if [ -z "$PKG_MGR" ]; then
-    echo "##warn No hay gestor de paquetes conocido; instala: ${APT_PKGS}"
+    echo "##warn No hay gestor de paquetes conocido; instala: ${APT_PKGS_STR}"
   elif [ "$sudo_ok" = "0" ]; then
-    echo "##log Omito instalacion de: ${APT_PKGS} (sudo no activo)"
+    echo "##log Omito instalacion de: ${APT_PKGS_STR} (sudo no activo)"
   else
     case "$PKG_MGR" in
       apt-get)
         echo "##log Actualizando indices (apt)"
         pkg_run apt-get update || true
-        echo "##log Instalando: ${APT_PKGS}"
-        if ! pkg_run apt-get install -y --no-install-recommends ${APT_PKGS}; then
-          echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        echo "##log Instalando: ${APT_PKGS_STR}"
+        if ! pkg_run apt-get install -y --no-install-recommends ${APT_PKGS_STR}; then
+          echo "##warn No se pudieron instalar: ${APT_PKGS_STR}"
         fi
         ;;
       dnf)
         echo "##log Actualizando indices (dnf)"
         pkg_run dnf makecache || true
-        echo "##log Instalando: ${APT_PKGS}"
-        pkg_run dnf install -y ${APT_PKGS} || echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        echo "##log Instalando: ${APT_PKGS_STR}"
+        pkg_run dnf install -y ${APT_PKGS_STR} || echo "##warn No se pudieron instalar: ${APT_PKGS_STR}"
         ;;
       pacman)
         echo "##log Actualizando indices (pacman)"
         pkg_run pacman -Sy --noconfirm || true
-        echo "##log Instalando: ${APT_PKGS}"
-        pkg_run pacman -S --noconfirm ${APT_PKGS} || echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        echo "##log Instalando: ${APT_PKGS_STR}"
+        pkg_run pacman -S --noconfirm ${APT_PKGS_STR} || echo "##warn No se pudieron instalar: ${APT_PKGS_STR}"
         ;;
       zypper)
-        echo "##log Instalando: ${APT_PKGS}"
-        pkg_run zypper --non-interactive install ${APT_PKGS} || echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        echo "##log Instalando: ${APT_PKGS_STR}"
+        pkg_run zypper --non-interactive install ${APT_PKGS_STR} || echo "##warn No se pudieron instalar: ${APT_PKGS_STR}"
         ;;
       apk)
-        echo "##log Instalando: ${APT_PKGS}"
-        pkg_run apk add --no-cache ${APT_PKGS} || echo "##warn No se pudieron instalar: ${APT_PKGS}"
+        echo "##log Instalando: ${APT_PKGS_STR}"
+        pkg_run apk add --no-cache ${APT_PKGS_STR} || echo "##warn No se pudieron instalar: ${APT_PKGS_STR}"
         ;;
     esac
   fi

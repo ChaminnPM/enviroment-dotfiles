@@ -214,9 +214,9 @@ if [ "$MODE" = "doctor" ]; then
   fi
   if [ -f "$HOME/.ssh/config" ]; then
     m="$(_file_mode "$HOME/.ssh/config")"
-    [ "$m" = "600" ] && d_ok "~/.ssh/config 0600" || d_warn "~/.ssh/config con permisos $m (deberia ser 600)"
+    [ "$m" = "600" ] && d_ok "$HOME/.ssh/config 0600" || d_warn "$HOME/.ssh/config con permisos $m (deberia ser 600)"
     grep -q '# >>> dotfiles-managed' "$HOME/.ssh/config" 2>/dev/null \
-      && d_ok "seccion SSH gestionada presente" || d_warn "~/.ssh/config sin seccion gestionada"
+      && d_ok "seccion SSH gestionada presente" || d_warn "$HOME/.ssh/config sin seccion gestionada"
   fi
   if [ -f "$HOME/claves-ssh.txt" ]; then
     m="$(_file_mode "$HOME/claves-ssh.txt")"
@@ -224,7 +224,7 @@ if [ "$MODE" = "doctor" ]; then
   fi
   if [ -f "$HOME/.gitconfig" ]; then
     grep -q '# >>> dotfiles-gitconfig' "$HOME/.gitconfig" 2>/dev/null \
-      && d_ok "~/.gitconfig usa bloque gestionado" || d_warn "~/.gitconfig sin bloque gestionado (config del usuario intacta)"
+      && d_ok "$HOME/.gitconfig usa bloque gestionado" || d_warn "$HOME/.gitconfig sin bloque gestionado (config del usuario intacta)"
   fi
   if [ -f "$HOME/.config/git-accounts.sh" ]; then
     # shellcheck disable=SC1090
