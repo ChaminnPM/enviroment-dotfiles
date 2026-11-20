@@ -58,7 +58,8 @@ jobs:
       - name: Sin secretos en archivos versionados
         run: |
           set -euo pipefail
-          if git grep -n -E 'ghp_[A-Za-z0-9]{20}|github_pat_|xox[baprs]-|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----' -- .; then
+          # Excluir el propio workflow: contiene la regex literal y daria falso positivo.
+          if git grep -n -E 'ghp_[A-Za-z0-9]{20}|github_pat_|xox[baprs]-|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----' -- . ':!.github/workflows/ci.yml'; then
             echo 'ERROR: posible secreto versionado'; exit 1
           fi
           test -f config/ssh/known_hosts
