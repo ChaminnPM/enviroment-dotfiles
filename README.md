@@ -118,7 +118,8 @@ y `VERBOSE=1` como variables de entorno.
 - `config/alacritty/`: plantillas TOML (requiere alacritty >= 0.13) generadas desde `config/theme/dracula.env`. `common.toml.tpl` lleva fuente y paleta; `linux.toml.tpl` y `windows-wsl.toml.tpl` son overlays segun el entorno (`DOTFILES_ENV`). Solo se instala si `alacritty` esta en el PATH y no hay configuracion previa no gestionada.
 - `agents/`: `net-qa`, `react-qa`, `lua-qa`. (`analyze-webrtc-dumps` vive en el repo privado.)
 - `skills/`: `generate-test-cases`, `generate-tests`, `graphify` (externa), `security-audit` (externa).
-- `plugins/`: `herdr-agent-state.js`. Los plugins de paquete se declaran en `opencode.jsonc`.
+- `plugins/`: `herdr-agent-state.js` y `google-quota/` (widget de cuota, atajo
+  `<leader>o`). Los plugins de paquete se declaran en `opencode.jsonc`.
 - `memory/skills-best-practices.md`: guia de escritura de skills/agents.
 - `AGENTS.md`: instrucciones generales con graphify.
 - `scripts/`: instalacion, sincronizacion, identidad Git y actualizacion de skills externas.

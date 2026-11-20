@@ -10,8 +10,18 @@
   "session": {
     "sidebar": "auto",
     "scrollbar": false,
-    "thinking": "hide"
+    "thinking": "hide",
+    "verbosity": "low"
   },
   "animations": true,
-  "plugins": ["./herdr-opencode"]
+  "mouse": true,
+  "keybinds": {
+    "quota-window.show": "<leader>o"
+  },
+  "plugins": [
+    "./herdr-opencode"
+  ],
+  "tabs": {
+    "mode": "off"
+  }
 }
