@@ -416,6 +416,36 @@ func TestViewFormScrollKeepsActiveField(t *testing.T) {
 	}
 }
 
+func TestKeyDisplayRedactsPrivateKeys(t *testing.T) {
+	dir := t.TempDir()
+	pub := filepath.Join(dir, "id_ed25519.pub")
+	priv := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(pub, []byte("ssh-ed25519 CLAVE-PUBLICA\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(priv, []byte("CLAVE-PRIVADA-SECRETA"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := keyDisplay(pub); !strings.Contains(got, "CLAVE-PUBLICA") {
+		t.Fatalf(".pub debe mostrar su contenido, obtuve %q", got)
+	}
+	if got := keyDisplay(priv); got != redactedKey {
+		t.Fatalf("la llave privada debe redactarse, obtuve %q", got)
+	}
+
+	// El cache que alimenta el panel nunca guarda contenido privado.
+	m := &stepsModel{}
+	m.loadKey(planInput{Path: priv})
+	if got := m.keyCache[priv]; got != redactedKey {
+		t.Fatalf("loadKey guardo %q, quiere redaccion", got)
+	}
+	m.loadKey(planInput{Path: pub})
+	if got := m.keyCache[pub]; !strings.Contains(got, "CLAVE-PUBLICA") {
+		t.Fatalf("loadKey debe conservar el contenido .pub, obtuve %q", got)
+	}
+}
+
 func TestStepNavigationAfterFinish(t *testing.T) {
 	p := plan{Title: "T", Steps: []planStep{
 		{Title: "A", Cmd: "true"},

@@ -55,8 +55,10 @@ Uso: install.sh [opciones]
   --only <texto>       ejecuta solo los pasos que coincidan
   -h, --help           esta ayuda
 
-Variables: REPO_REF (rama/tag, default main), REPO_SHA256 (checksum opcional
-del tarball), NUI_BASE_URL, NUI_VERSION.
+Variables: REPO_REF (rama/tag, default main; solo [A-Za-z0-9._-]),
+REPO_SHA256 (checksum SHA256 del tarball; OBLIGATORIO por defecto),
+NUI_BASE_URL, NUI_VERSION. Para omitir la verificacion del checksum (INSEGURO)
+fija NUI_ALLOW_UNVERIFIED=1.
 
 Solo Linux y WSL. macOS/Windows: ver docs/PLATFORMS.md.
 HELP
@@ -66,6 +68,14 @@ HELP
   esac
   shift
 done
+
+# REPO_REF se interpola en una URL y en un nombre de archivo: solo se
+# aceptan caracteres seguros. Nunca se pasa a eval ni a bash -c.
+if [[ ! "$REPO_REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  printf '[ERROR] REPO_REF invalido: %q (solo se permiten [A-Za-z0-9._-])\n' "$REPO_REF" >&2
+  exit 2
+fi
+
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 chmod 700 "$LOG_DIR" 2>/dev/null || true
 
@@ -73,8 +83,48 @@ if [ "${WSL_INFO:-0}" = "1" ]; then
   printf '[INFO] WSL detectado; se instalara como Linux.\n'
 fi
 
+# --- cancelacion limpia ---------------------------------------------------
+# Senalizacion copiada de install.sh del repo privado: al recibir INT/TERM/HUP
+# se mata el arbol de procesos (curl/tar/apt) y se limpia el temporal.
 TMP_REPO="$(mktemp -d)"
-trap 'rm -rf "$TMP_REPO"' EXIT
+
+_install_cleanup() {
+  [ -n "$TMP_REPO" ] && rm -rf "$TMP_REPO" 2>/dev/null || true
+}
+
+_install_kill_tree() {
+  local pid="$1" sig="$2" kids child
+  kids="$(ps -o pid= --ppid "$pid" 2>/dev/null || true)"
+  for child in $kids; do
+    _install_kill_tree "$child" "$sig"
+  done
+  if [ "$pid" != "$$" ]; then
+    kill -"$sig" "$pid" 2>/dev/null || true
+  fi
+}
+
+_install_signal() {
+  # Handler inofensivo mientras se cancela: los hijos exec'ados heredarian
+  # "ignored" si se usara trap '', y no responderian al TERM del grupo.
+  trap ':' INT TERM HUP
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -P "$$" 2>/dev/null || true
+  fi
+  _install_kill_tree "$$" TERM
+  local pgid=""
+  pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ "$pgid" = "$$" ]; then
+    kill -TERM -- "-$$" 2>/dev/null || true
+  fi
+  sleep 0.2 2>/dev/null || sleep 1 2>/dev/null || true
+  _install_kill_tree "$$" KILL
+  _install_cleanup
+  exit 130
+}
+trap '_install_signal INT' INT
+trap '_install_signal TERM' TERM
+trap '_install_signal HUP' HUP
+trap '_install_cleanup' EXIT
 
 APTPFX=""
 if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
@@ -93,47 +143,54 @@ if [ -n "$APTPFX" ] && [ -e /dev/tty ]; then
   fi
 fi
 
+# quiet_run <titulo> <cmd> [args...]
+# Ejecuta argv como array (sin eval): ningun dato del usuario se interpola en
+# una cadena de shell. Toda la salida se captura en un log y se devuelve el
+# codigo de salida real del comando.
 quiet_run() {
-  local title="$1" cmd="$2" log
+  local title="$1" log rc=0
+  shift
   log="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-$$.log"
   if [ "${VERBOSE:-0}" = "1" ]; then
-    eval "$cmd"
-    return $?
+    "$@" || rc=$?
+    return "$rc"
   fi
   # si nui ya esta disponible de una corrida anterior, usar su spinner
   if command -v nui >/dev/null 2>&1 && [ -t 1 ]; then
-    if nui spin --title "$title" -- bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
-      return 0
-    fi
-    printf '\033[0;31m[ERROR]\033[0m %s\n' "$title" >&2
-    printf 'Log: %s\n' "$log" >&2
-    [ -f "$log" ] && tail -n 15 "$log" >&2 || true
-    return 1
+    nui spin --title "$title" -- "$@" >"$log" 2>&1 || rc=$?
+  else
+    "$@" >"$log" 2>&1 || rc=$?
   fi
-  if bash -c 'eval "$1" >"$2" 2>&1' _ "$cmd" "$log"; then
+  if [ "$rc" -eq 0 ]; then
     printf '\033[0;32m[OK]\033[0m %s\n' "$title"
     return 0
   fi
   printf '\033[0;31m[ERROR]\033[0m %s\n' "$title" >&2
   printf 'Log: %s\n' "$log" >&2
   [ -f "$log" ] && tail -n 15 "$log" >&2 || true
-  return 1
+  return "$rc"
 }
 
 ensure_cmd() {
-  local cmd="$1" pkg="${2:-$1}" mgr prefix
+  local cmd="$1" pkg="${2:-$1}" mgr="" m
+  local -a root=()
   command -v "$cmd" >/dev/null 2>&1 && return 0
-  mgr=""
   for m in apt-get dnf pacman zypper apk; do
     if command -v "$m" >/dev/null 2>&1; then mgr="$m"; break; fi
   done
-  prefix="$( [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1 && printf 'sudo ' )"
+  if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    root=(sudo)
+  fi
   case "$mgr" in
-    apt-get) quiet_run "Instalando $pkg..." "${prefix}apt-get update >/dev/null 2>&1 || true; ${prefix}apt-get install -y $pkg >/dev/null 2>&1" ;;
-    dnf) quiet_run "Instalando $pkg..." "${prefix}dnf install -y $pkg >/dev/null 2>&1" ;;
-    pacman) quiet_run "Instalando $pkg..." "${prefix}pacman -S --noconfirm $pkg >/dev/null 2>&1" ;;
-    zypper) quiet_run "Instalando $pkg..." "${prefix}zypper --non-interactive install $pkg >/dev/null 2>&1" ;;
-    apk) quiet_run "Instalando $pkg..." "${prefix}apk add --no-cache $pkg >/dev/null 2>&1" ;;
+    apt-get)
+      # La actualizacion de indices es best-effort; la instalacion no.
+      quiet_run "Actualizando indice de paquetes..." "${root[@]+"${root[@]}"}" apt-get update || true
+      quiet_run "Instalando $pkg..." "${root[@]+"${root[@]}"}" apt-get install -y "$pkg"
+      ;;
+    dnf) quiet_run "Instalando $pkg..." "${root[@]+"${root[@]}"}" dnf install -y "$pkg" ;;
+    pacman) quiet_run "Instalando $pkg..." "${root[@]+"${root[@]}"}" pacman -S --noconfirm "$pkg" ;;
+    zypper) quiet_run "Instalando $pkg..." "${root[@]+"${root[@]}"}" zypper --non-interactive install "$pkg" ;;
+    apk) quiet_run "Instalando $pkg..." "${root[@]+"${root[@]}"}" apk add --no-cache "$pkg" ;;
     *) printf '[ERROR] No hay gestor de paquetes para %s\n' "$pkg" >&2; return 1 ;;
   esac
 }
@@ -143,10 +200,21 @@ ensure_cmd tar tar
 ensure_cmd gzip gzip
 
 TARBALL="$TMP_REPO/repo.tar.gz"
+TARBALL_URL="https://github.com/ChaminnPM/enviroment-dotfiles/archive/refs/heads/${REPO_REF}.tar.gz"
 quiet_run "Descargando repositorio (tarball)..." \
-  "curl -fsSL --retry 3 --max-time 600 'https://github.com/ChaminnPM/enviroment-dotfiles/archive/refs/heads/${REPO_REF}.tar.gz' -o '$TARBALL'"
+  curl -fsSL --retry 3 --max-time 600 "$TARBALL_URL" -o "$TARBALL"
 
-if [ -n "$REPO_SHA256" ]; then
+# Fail-closed: sin checksum no se extrae ni se ejecuta nada del tarball.
+if [ -z "$REPO_SHA256" ]; then
+  if [ "${NUI_ALLOW_UNVERIFIED:-0}" != "1" ]; then
+    printf '[ERROR] REPO_SHA256 no definido: no se puede verificar el tarball descargado.\n' >&2
+    printf '        Obtenlo con: curl -fsSL --retry 3 --max-time 600 "%s" -o repo.tar.gz && sha256sum repo.tar.gz\n' "$TARBALL_URL" >&2
+    printf '        Luego exporta REPO_SHA256=<hash> y vuelve a ejecutar el instalador.\n' >&2
+    printf '        Omitir la verificacion es INSEGURO: NUI_ALLOW_UNVERIFIED=1 (opt-out).\n' >&2
+    exit 2
+  fi
+  printf '[WARN] REPO_SHA256 vacio: verificacion OMITIDA (NUI_ALLOW_UNVERIFIED=1, INSEGURO)\n' >&2
+else
   if command -v sha256sum >/dev/null 2>&1; then
     have="$(sha256sum "$TARBALL" | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then
@@ -161,7 +229,7 @@ if [ -n "$REPO_SHA256" ]; then
   printf '[OK] Checksum del tarball verificado\n'
 fi
 
-quiet_run "Extrayendo repositorio..." "tar -xzf '$TARBALL' --strip-components=1 -C '$TMP_REPO'"
+quiet_run "Extrayendo repositorio..." tar -xzf "$TARBALL" --strip-components=1 -C "$TMP_REPO"
 
 cd "$TMP_REPO"
 bash bootstrap.sh ${BOOTSTRAP_ARGS[@]+"${BOOTSTRAP_ARGS[@]}"}

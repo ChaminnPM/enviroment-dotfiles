@@ -11,7 +11,7 @@ import (
 	"os"
 )
 
-var nuiVersion = "0.2.7"
+var nuiVersion = "0.2.8"
 
 func main() {
 	args := stripNoColor(os.Args[1:])
@@ -110,7 +110,10 @@ Comandos:
   steps run --plan <archivo|-> [--log-dir DIR] [--plain] [--non-interactive] [--title t]
                                           panel de pasos con ejecucion en vivo
   spin [--spinner s] [--titulo t] -- <cmd...>   spinner mientras corre cmd
-  input [--prompt p] [--placeholder x] [--value v] [--password]
+  input [--prompt p] [--placeholder x] [--value v] [--password] [--no-echo]
+                                          sin TTY lee stdin y escribe el valor en stdout
+                                          (p. ej. PW=$(nui input --password)); --no-echo
+                                          (solo sin TTY) lo lee pero no imprime el valor
   confirm <pregunta>                      exit 0 si, exit 1 no
   choose [--header h] [--no-limit] [--height n] <opciones...>
   pager <archivo...>

@@ -44,6 +44,25 @@ HELP
   shift
 done
 
+# Verificacion de pin para instaladores remotos. Los cuerpos de ui_panel_step
+# corren en procesos bash aparte; se exporta la funcion para que la hereden
+# (cada paso que la usa sourcea scripts/lib/dotfiles.sh, que define
+# dotfiles_verify_sha256). Exigir el hash es el comportamiento por defecto;
+# NUI_ALLOW_UNVERIFIED=1 es un opt-out inseguro explicito.
+_require_pin() {
+  local file="$1" want="$2" name="$3" envname="$4"
+  if [ -z "$want" ]; then
+    if [ "${NUI_ALLOW_UNVERIFIED:-0}" != "1" ]; then
+      printf '##warn Falta %s (SHA256) para %s; fijalo o usa NUI_ALLOW_UNVERIFIED=1 (INSEGURO)\n' "$envname" "$name"
+      return 1
+    fi
+    printf '##warn %s SIN verificar (NUI_ALLOW_UNVERIFIED=1: INSEGURO)\n' "$name"
+    return 0
+  fi
+  dotfiles_verify_sha256 "$file" "$want" "$name"
+}
+export -f _require_pin
+
 if command -v dotfiles_assert_supported >/dev/null 2>&1; then
   dotfiles_assert_supported || exit 1
 fi
@@ -324,8 +343,13 @@ show_key() {
 
 ssh_test() {
   local title="$1" target="$2" out
-  # StrictHostKeyChecking=accept-new cubre known_hosts sin depender de ui.sh.
-  if out="$(ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 "$target" 2>&1 || true)"; then
+  # Hosts pinnados en el repo: UserKnownHostsFile + StrictHostKeyChecking=yes.
+  # Sin el archivo pinnado, ssh falla cerrado (no acepta claves nuevas).
+  local known_hosts="$REPO_DIR/config/ssh/known_hosts"
+  if [ ! -f "$known_hosts" ]; then
+    echo "##warn Falta config/ssh/known_hosts pinnado; no se aceptaran hosts nuevos"
+  fi
+  if out="$(ssh -T -o UserKnownHostsFile="$known_hosts" -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10 "$target" 2>&1 || true)"; then
     if printf '%s\n' "$out" | grep -Eiq 'successfully authenticated|authenticated via ssh key|logged in as'; then
       echo "##log $title OK"
       return 0
@@ -357,8 +381,10 @@ esac
 
 for slug in ${GIT_ACCOUNT_SLUGS:-}; do
   u="$(printf '%s' "$slug" | tr 'a-z-' 'A-Z_')"
-  eval "esp=\"\${ACC_${u}_ESPACIO:-}\""
-  eval "pf=\"\${ACC_${u}_PLATFORM:-github}\""
+  # Expansion indirecta (bash 4+): nunca evaluar el nombre construido.
+  local var_esp="ACC_${u}_ESPACIO" var_pf="ACC_${u}_PLATFORM"
+  esp="${!var_esp:-}"
+  pf="${!var_pf:-github}"
   test_account "SSH $esp" "git@git-$slug" "$HOME/.ssh/id_ed25519_$slug.pub" "$pf"
 done
 echo "##log Prueba SSH finalizada"
@@ -507,28 +533,22 @@ ensure_nvim() {
   esac
   tmp="$(mktemp -d)"
   dir=""
-  local ver="${NEOVIM_VERSION:-v0.11.4}" ref base
+  local ver="${NEOVIM_VERSION:-v0.11.4}" base
   for asset in "nvim-linux-${arch}" "nvim-linux64"; do
-    for ref in "$ver" latest; do
-      if [ "$ref" = "latest" ]; then
-        base="https://github.com/neovim/neovim/releases/latest/download/${asset}.tar.gz"
-      else
-        base="https://github.com/neovim/neovim/releases/download/${ref}/${asset}.tar.gz"
-      fi
-      echo "##log Descargando neovim (${ref}, ${asset})..."
-      if curl -fsSL --retry 3 --max-time 300 "$base" -o "$tmp/nvim.tgz"; then
-        dir="$asset"
-        break 2
-      fi
-    done
+    base="https://github.com/neovim/neovim/releases/download/${ver}/${asset}.tar.gz"
+    echo "##log Descargando neovim (${ver}, ${asset})..."
+    if curl -fsSL --retry 3 --max-time 300 "$base" -o "$tmp/nvim.tgz"; then
+      dir="$asset"
+      break
+    fi
   done
   if [ -z "$dir" ]; then
-    echo "##warn No se pudo descargar neovim desde GitHub"
+    echo "##warn No se pudo descargar neovim ${ver} desde GitHub (no se intenta 'latest')"
     rm -rf "$tmp"
     return 1
   fi
-  if [ -n "${NEOVIM_SHA256:-}" ] && ! dotfiles_verify_sha256 "$tmp/nvim.tgz" "$NEOVIM_SHA256" "neovim"; then
-    echo "##warn Checksum de neovim invalido; instalacion abortada"
+  if ! _require_pin "$tmp/nvim.tgz" "${NEOVIM_SHA256:-}" "neovim" "NEOVIM_SHA256"; then
+    echo "##warn Checksum de neovim invalido o ausente; instalacion abortada"
     rm -rf "$tmp"
     return 1
   fi
@@ -601,8 +621,20 @@ NVM_PIN="${NVM_VERSION:-v0.40.8}"
 if ! command -v node >/dev/null 2>&1; then
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
     echo "##log Instalando nvm $NVM_PIN"
-    curl -fsSL --retry 3 --max-time 60 "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_PIN}/install.sh" | bash >/dev/null 2>&1 \
+    nvm_tmp="$(mktemp)"
+    trap 'rm -f "$nvm_tmp"' EXIT
+    if ! curl -fsSL --retry 3 --max-time 60 \
+         "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_PIN}/install.sh" -o "$nvm_tmp"; then
+      echo "##warn No se pudo descargar el instalador de nvm $NVM_PIN"
+      exit 1
+    fi
+    if ! _require_pin "$nvm_tmp" "${NVM_SHA256:-}" "nvm-install" "NVM_SHA256"; then
+      echo "##warn Checksum de nvm invalido o ausente; instalacion abortada"
+      exit 1
+    fi
+    bash "$nvm_tmp" >/dev/null 2>&1 \
       || echo "##warn No se pudo instalar nvm automáticamente"
+    rm -f "$nvm_tmp"
   fi
   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
   if ! command -v node >/dev/null 2>&1; then
@@ -623,6 +655,8 @@ fi
 EOF
 
 ui_panel_step "Actualizar nvm (opcional)" --optional --estimate 30 <<'EOF'
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
 NVM_DIR="$HOME/.nvm"
 if [ ! -s "$NVM_DIR/nvm.sh" ]; then
   echo "##log nvm no instalado; nada que actualizar"
@@ -637,13 +671,24 @@ if [ "$cur" = "$want" ]; then
   exit 0
 fi
 echo "##log Actualizando nvm $cur -> $want"
-if curl -fsSL --retry 3 --max-time 60 "https://raw.githubusercontent.com/nvm-sh/nvm/v${want}/install.sh" | bash >/dev/null 2>&1 \
-  && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; then
+nvm_up_tmp="$(mktemp)"
+trap 'rm -f "$nvm_up_tmp"' EXIT
+if ! curl -fsSL --retry 3 --max-time 60 \
+     "https://raw.githubusercontent.com/nvm-sh/nvm/v${want}/install.sh" -o "$nvm_up_tmp"; then
+  echo "##warn No se pudo descargar el instalador de nvm v${want}"
+  exit 1
+fi
+if ! _require_pin "$nvm_up_tmp" "${NVM_SHA256:-}" "nvm-install-v${want}" "NVM_SHA256"; then
+  echo "##warn Checksum de nvm invalido o ausente; actualizacion abortada"
+  exit 1
+fi
+if bash "$nvm_up_tmp" >/dev/null 2>&1 && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; then
   echo "##log nvm ahora: $(nvm --version 2>/dev/null || echo '?')"
 else
   echo "##warn No se pudo actualizar nvm a $want"
   exit 1
 fi
+rm -f "$nvm_up_tmp"
 EOF
 
 ui_panel_step "OpenCode" --estimate 90 <<'EOF'
@@ -658,8 +703,8 @@ if ! command -v opencode >/dev/null 2>&1; then
     echo "##warn No se pudo descargar el instalador de OpenCode"
     exit 1
   fi
-  if [ -n "${OPENCODE_SHA256:-}" ] && ! dotfiles_verify_sha256 "$tmp_oc" "$OPENCODE_SHA256" "opencode-install"; then
-    echo "##warn Checksum del instalador de OpenCode invalido"
+  if ! _require_pin "$tmp_oc" "${OPENCODE_SHA256:-}" "opencode-install" "OPENCODE_SHA256"; then
+    echo "##warn Checksum del instalador de OpenCode invalido o ausente"
     exit 1
   fi
   bash "$tmp_oc" --no-modify-path </dev/null >/dev/null 2>&1 \
@@ -765,14 +810,15 @@ if ! command -v herdr >/dev/null 2>&1; then
   trap 'rm -f "$herdr_tmp"' EXIT
   url="${HERDR_INSTALL_URL:-https://herdr.dev/install.sh}"
   if curl -fsSL --retry 3 --max-time 120 "$url" -o "$herdr_tmp"; then
-    if [ -n "${HERDR_SHA256:-}" ] && ! dotfiles_verify_sha256 "$herdr_tmp" "$HERDR_SHA256" "herdr-install"; then
-      echo "##warn Checksum del instalador de herdr invalido"
+    if ! _require_pin "$herdr_tmp" "${HERDR_SHA256:-}" "herdr-install" "HERDR_SHA256"; then
+      echo "##warn Checksum del instalador de herdr invalido o ausente; abortado"
       exit 1
     fi
     sh "$herdr_tmp" </dev/null >/dev/null 2>&1 \
       || echo "##warn herdr no se instaló automáticamente"
   else
     echo "##warn No se pudo descargar el instalador de herdr"
+    exit 1
   fi
 fi
 for p in "$HOME/.herdr/bin" "$HOME/.local/bin" "$HOME/.opencode/bin"; do
@@ -790,7 +836,18 @@ ui_panel_step "Wrappers" --estimate 10 <<'EOF'
 source "$REPO_DIR/scripts/lib/dotfiles.sh"
 mkdir -p "$HOME/.local/bin"
 dotfiles_env_path_add "$HOME/.local/bin"
-sync_url="${SYNC_SCRIPT_URL:-https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/scripts/sync.sh}"
+# El wrapper ya no usa curl|bash: clona el repo en un temporal, ejecuta el
+# script desde ese clon y limpia siempre con trap.
+sync_ref="${SYNC_REF:-}"
+sync_sha="${SYNC_SHA:-}"
+if [ -n "$sync_ref" ] && ! printf '%s\n' "$sync_ref" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+  echo "##warn SYNC_REF invalido; se ignora"
+  sync_ref=""
+fi
+if [ -n "$sync_sha" ] && ! printf '%s\n' "$sync_sha" | grep -Eq '^[0-9a-fA-F]{7,40}$'; then
+  echo "##warn SYNC_SHA invalido; se ignora"
+  sync_sha=""
+fi
 cat > "$HOME/.local/bin/sync-dotfiles" <<WRAP
 #!/usr/bin/env bash
 set -euo pipefail
@@ -799,7 +856,29 @@ if ! command -v git >/dev/null 2>&1; then
   echo "git no está instalado. Ejecuta bootstrap.sh o instala git." >&2
   exit 1
 fi
-exec bash <(curl -fsSL --retry 3 --max-time 60 "$sync_url") "\$@"
+SYNC_REPO_URL="\${SYNC_REPO_URL:-https://github.com/ChaminnPM/enviroment-dotfiles.git}"
+SYNC_REF_VAL='$sync_ref'
+SYNC_SHA_VAL='$sync_sha'
+_sync_tmp="\$(mktemp -d)"
+_sync_cleanup() { rm -rf "\$_sync_tmp" 2>/dev/null || true; }
+trap _sync_cleanup EXIT
+trap 'exit 130' INT TERM HUP
+clone_args=(--depth 1)
+if [ -n "\$SYNC_REF_VAL" ] && [ "\$SYNC_REF_VAL" != "main" ]; then
+  clone_args+=(--branch "\$SYNC_REF_VAL")
+fi
+if ! git clone "\${clone_args[@]}" "\$SYNC_REPO_URL" "\$_sync_tmp/repo" >/dev/null 2>&1; then
+  echo "No se pudo clonar el repo para sync-dotfiles" >&2
+  exit 1
+fi
+if [ -n "\$SYNC_SHA_VAL" ]; then
+  _head="\$(git -C "\$_sync_tmp/repo" rev-parse HEAD 2>/dev/null || true)"
+  if [ "\$_head" != "\$SYNC_SHA_VAL" ]; then
+    echo "HEAD del repo no coincide con SYNC_SHA (\$_head != \$SYNC_SHA_VAL)" >&2
+    exit 1
+  fi
+fi
+bash "\$_sync_tmp/repo/scripts/sync.sh" "\$@"
 WRAP
 chmod 755 "$HOME/.local/bin/sync-dotfiles"
 echo "sync-dotfiles instalado"

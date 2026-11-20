@@ -232,8 +232,12 @@ if [ "$MODE" = "doctor" ]; then
     d_ok "manifiesto de cuentas git (personal: $PERSONAL_PLATFORM)"
     for slug in ${GIT_ACCOUNT_SLUGS:-}; do
       u="$(printf '%s' "$slug" | tr 'a-z-' 'A-Z_')"
-      eval "esp=\"\${ACC_${u}_ESPACIO:-}\""
-      eval "folder=\"\${ACC_${u}_FOLDER:-}\""
+      # Expansion indirecta de bash (sin eval): el nombre se construye, nunca
+      # se ejecuta como codigo. printf -v evita interpolaciones en strings.
+      esp_var="ACC_${u}_ESPACIO"
+      folder_var="ACC_${u}_FOLDER"
+      printf -v esp '%s' "${!esp_var:-}"
+      printf -v folder '%s' "${!folder_var:-}"
       if [ -f "$HOME/.ssh/id_ed25519_$slug" ]; then
         d_ok "clave $esp presente"
         m="$(_file_mode "$HOME/.ssh/id_ed25519_$slug")"
@@ -273,7 +277,9 @@ case "$MODE" in
       if [ "$NUI_DRY_RUN" = "1" ]; then
         ui_dim "[dry-run] git pull --rebase --autostash en $REPO_DIR"
       else
-        ui_logged "Actualizando repo publico..." "cd '$REPO_DIR' && git pull --rebase --autostash >/dev/null 2>&1" \
+        # argv como array: sin eval, sin interpolar rutas en un string de shell.
+        ui_logged_argv "Actualizando repo publico..." \
+          git -C "$REPO_DIR" pull --rebase --autostash \
           || ui_warn "git pull fallo; revisa estado local o conflictos"
       fi
     fi
@@ -285,7 +291,8 @@ case "$MODE" in
       if [ "$NUI_DRY_RUN" = "1" ]; then
         ui_dim "[dry-run] npm install en $OPENCODE_DIR"
       else
-        ui_logged "npm install" "cd '$OPENCODE_DIR' && npm install >/dev/null 2>&1" \
+        ui_logged_argv "npm install" \
+          npm --prefix "$OPENCODE_DIR" install \
           || ui_warn "npm install fallo; revisa node_modules manualmente"
       fi
     else
@@ -317,10 +324,19 @@ case "$MODE" in
     done
     add_paths+=("config/theme")
     stamp="$(date +%Y-%m-%dT%H:%M:%S%z)"
-    ui_logged "Commit publico..." \
-      "cd '$REPO_DIR' && git add -- ${add_paths[*]} && git commit -m 'sync: $stamp' >/dev/null 2>&1" \
-      || ui_dim "Nada que commitear"
-    ui_logged "Push publico..." "cd '$REPO_DIR' && git push >/dev/null 2>&1" || ui_fatal "No se pudo subir al repo publico"
+    # argv como array: las rutas y la fecha viajan como datos, nunca como
+    # fragmentos de un string que el shell tenga que evaluar.
+    git -C "$REPO_DIR" add -- "${add_paths[@]}" 2>/dev/null || true
+    if git -C "$REPO_DIR" diff --cached --quiet; then
+      ui_dim "Nada que commitear"
+    else
+      ui_logged_argv "Commit publico..." \
+        git -C "$REPO_DIR" commit -m "sync: $stamp" \
+        || ui_dim "Nada que commitear"
+    fi
+    ui_logged_argv "Push publico..." \
+      git -C "$REPO_DIR" push \
+      || ui_fatal "No se pudo subir al repo publico"
     ui_summary "Sincronizado (push publico)" "Repo publico actualizado"
     ;;
   *)

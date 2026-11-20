@@ -3,9 +3,13 @@ config/opencode/service.json
 config/opencode/node_modules/
 config/opencode/*.local.jsonc
 
-# Reportes y logs locales
+# Reportes, logs y secretos locales
 reports/
 *.log
+.env
+.env.*
+node_modules/
+*.local.jsonc
 
 # Build local de la TUI
 ui/nui

@@ -513,10 +513,12 @@ fi
 
 # --- comprobacion SSH (solo standalone) ---------------------------------------
 ssh_check() {
-  local title="$1" target="$2"
-  ui_seed_known_hosts
-  local out
-  if out="$(ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 "$target" 2>&1 || true)"; then
+  local title="$1" target="$2" kh="${REPO_DIR:-}/config/ssh/known_hosts" out
+  ui_seed_known_hosts || return 1
+  # Pin de host keys: nunca accept-new ( permitiria MITM en el primer contacto).
+  local -a ssh_opts=(-T -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10)
+  [ -f "$kh" ] && ssh_opts+=(-o "UserKnownHostsFile=$kh")
+  if out="$(ssh "${ssh_opts[@]}" "$target" 2>&1 || true)"; then
     if printf '%s\n' "$out" | grep -Eiq 'successfully authenticated|authenticated via ssh key|logged in as'; then
       say "$title OK"
       return 0

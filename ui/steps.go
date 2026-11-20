@@ -645,16 +645,29 @@ func (m *stepsModel) prepareField(in planInput) {
 	m.input.Focus()
 }
 
+// redactedKey se muestra en lugar del contenido de una clave privada.
+const redactedKey = "<contenido redactado>"
+
+// keyDisplay devuelve el contenido de un campo type=key apto para mostrar.
+// Solo se leen llaves publicas (.pub): cualquier otra ruta se redacta para no
+// exponer una llave privada en el panel ni en los logs del modo plano.
+func keyDisplay(path string) string {
+	if !strings.HasSuffix(path, ".pub") {
+		return redactedKey
+	}
+	data, err := os.ReadFile(expandPath(path))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 // loadKey guarda en cache el contenido de la clave que muestra el formulario.
 func (m *stepsModel) loadKey(in planInput) {
 	if m.keyCache == nil {
 		m.keyCache = map[string]string{}
 	}
-	if data, err := os.ReadFile(expandPath(in.Path)); err == nil {
-		m.keyCache[in.Path] = string(data)
-	} else {
-		m.keyCache[in.Path] = ""
-	}
+	m.keyCache[in.Path] = keyDisplay(in.Path)
 }
 
 // storeField guarda el valor del campo activo antes de cambiar de campo, para
@@ -946,7 +959,7 @@ func (m stepsModel) execStep(idx int) tea.Cmd {
 	run := m.run
 
 	return func() tea.Msg {
-		logFile, err := os.Create(logPath)
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			logFile = nil
 		}
@@ -1497,12 +1510,9 @@ func (m stepsModel) viewForm(w, h int) string {
 			}
 
 		case "key":
-			path := expandPath(in.Path)
 			data, ok := m.keyCache[in.Path]
 			if !ok {
-				if b, err := os.ReadFile(path); err == nil {
-					data = string(b)
-				}
+				data = keyDisplay(in.Path)
 			}
 			if data == "" {
 				lines = append(lines, prefix+"  "+stFaint.Render(truncate("(sin generar: el paso de identidad no creo esta clave)", maxInt(0, innerW-4))))
@@ -1924,8 +1934,9 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 		} else {
 			pr, pw := io.Pipe()
 			c.Stdout, c.Stderr = pw, pw
-			logFile, _ := os.Create(filepath.Join(logDir,
-				fmt.Sprintf("steps-%s-%d-%02d-%s.log", start.Format("20060102-150405.000000000"), os.Getpid(), i+1, slugify(ps.Title))))
+			logFile, _ := os.OpenFile(filepath.Join(logDir,
+				fmt.Sprintf("steps-%s-%d-%02d-%s.log", start.Format("20060102-150405.000000000"), os.Getpid(), i+1, slugify(ps.Title))),
+				os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
@@ -1995,7 +2006,7 @@ func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader
 	if len(inputs) == 0 || stateDir == "" {
 		return
 	}
-	_ = os.MkdirAll(stateDir, 0o755)
+	_ = os.MkdirAll(stateDir, 0o700)
 	vals := map[string]string{}
 	var b strings.Builder
 	for _, in := range inputs {
@@ -2039,10 +2050,12 @@ func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader
 			}
 		case "key":
 			fmt.Printf("\n%s\n", in.Prompt)
-			path := expandPath(in.Path)
-			if data, err := os.ReadFile(path); err == nil {
-				fmt.Print(string(data))
-			} else {
+			switch data := keyDisplay(in.Path); {
+			case data == redactedKey:
+				fmt.Println(redactedKey)
+			case data != "":
+				fmt.Print(data)
+			default:
 				fmt.Printf("(sin generar: el paso de identidad no creo esta clave)\n")
 			}
 			fmt.Print("Pulsa enter para continuar... ")

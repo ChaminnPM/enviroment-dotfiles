@@ -7,6 +7,13 @@ LOG_DIR="${LOG_DIR:-$HOME/.local/state/enviroment-dotfiles/logs}"
 export VERBOSE="${VERBOSE:-0}"
 export UI_APP_TITLE="${UI_APP_TITLE:-AGENTS ENVIRONMENT}"
 export NUI_BASE_URL="${NUI_BASE_URL:-https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main}"
+# scripts/lib/ui.sh -> raiz del repo, para que ui_seed_known_hosts y
+# ui_install_ui encuentren config/ssh y bin/ aunque el llamador no exporte
+# REPO_DIR (por ejemplo, setup-git-identity.sh en modo standalone).
+if [ -z "${REPO_DIR:-}" ]; then
+  REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"
+fi
+export REPO_DIR
 
 # Helpers de dotfiles (respaldos, escritura atomica, PATH persistente).
 if [ -n "${REPO_DIR:-}" ] && [ -f "$REPO_DIR/scripts/lib/dotfiles.sh" ]; then
@@ -50,6 +57,11 @@ export NO_COLOR="${NO_COLOR:-}"
 if [ "$NUI_NO_COLOR" = "1" ]; then export NO_COLOR=1; fi
 export CLICOLOR="${CLICOLOR:-}"
 
+# Los logs se limitan al cerrar (N lineas) para que crezcan sin limite;
+# LOG_KEEP_ALL=1 conserva el log completo.
+LOG_KEEP_LINES="${LOG_KEEP_LINES:-500}"
+export LOG_KEEP_LINES
+
 # --- reporte final (pasos instalados / avisos / errores) -----------------
 REPORT_OK=()
 REPORT_WARN=()
@@ -61,8 +73,28 @@ report_err()  { REPORT_ERR+=("$*"); }
 report_info() { REPORT_INFO+=("$*"); }
 
 ensure_log_dir() {
+  # Los logs pueden contener salida de comandos con datos sensibles: se crean
+  # con permisos restrictivos desde el inicio (umask) y se refuerza con chmod.
+  umask 077
   mkdir -p "$LOG_DIR" 2>/dev/null || true
   chmod 700 "$LOG_DIR" 2>/dev/null || true
+}
+
+# Trunca un log ya cerrado a las ultimas LOG_KEEP_LINES lineas. Se llama al
+# final de cada captura; mientras el comando corre el log esta intacto.
+_ui_cap_log() {
+  local log="$1" lines tmp
+  [ "${LOG_KEEP_ALL:-0}" = "1" ] && return 0
+  [ -f "$log" ] || return 0
+  case "$LOG_KEEP_LINES" in ''|*[!0-9]*|0) return 0 ;; esac
+  lines="$(wc -l < "$log" 2>/dev/null || echo 0)"
+  [ "$lines" -le "$LOG_KEEP_LINES" ] && return 0
+  tmp="$(mktemp "${log}.cap.XXXXXX")" || return 0
+  if tail -n "$LOG_KEEP_LINES" "$log" > "$tmp"; then
+    mv -f "$tmp" "$log" || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 # --- binario nui ---------------------------------------------------------
@@ -403,31 +435,68 @@ _ui_timeout_prefix() {
   return 0
 }
 
-ui_logged() {
-  local title="$1" cmd="$2"
-  local log prefix
+# ui_logged_argv <titulo> <cmd> [args...]
+# Ejecuta "$@" como ARRAY: nunca eval, nunca bash -c con strings interpolados.
+# Funciona con argumentos que contienen espacios. Captura stdout+stderr en un
+# log bajo $LOG_DIR (ruta expuesta en UI_LAST_LOG) y devuelve el codigo real.
+UI_LAST_LOG=""
+ui_logged_argv() {
+  local title="$1" rc=0
+  shift
+  if [ $# -eq 0 ]; then
+    ui_error "ui_logged_argv: falta el comando"
+    return 2
+  fi
+
   ensure_log_dir
-  log="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-$$.log"
-  prefix="$(_ui_timeout_prefix)"
+  local log="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-$$-argv.log"
+  UI_LAST_LOG="$log"
+  # Crear el log explicitamente con 0600: las redirecciones posteriores
+  # reutilizan el archivo y conservan sus permisos (umask no reliably = 077).
+  : > "$log" 2>/dev/null || true
+  chmod 600 "$log" 2>/dev/null || true
+
+  # _ui_timeout_prefix devuelve un prefijo controlado ("timeout N "); se
+  # convierte a array sin eval para conservar argumentos con espacios.
+  local prefix=""
+  local -a prefix_arr=() cmd=()
+  prefix="$(_ui_timeout_prefix 2>/dev/null || true)"
+  if [ -n "$prefix" ]; then
+    read -r -a prefix_arr <<< "$prefix"
+  fi
+  cmd=("${prefix_arr[@]}" "$@")
 
   if [ "${VERBOSE:-0}" = "1" ]; then
-    eval "$cmd"
-    return $?
+    if command -v tee >/dev/null 2>&1; then
+      "${cmd[@]}" 2>&1 | tee "$log"
+      rc=${PIPESTATUS[0]}
+    else
+      "${cmd[@]}"
+      rc=$?
+    fi
+    _ui_cap_log "$log"
+    return "$rc"
   fi
 
   if ui_have; then
-    if "$(ui_bin)" spin --title "$title" -- bash -c "${prefix}eval \"\$1\" >\"\$2\" 2>&1" _ "$cmd" "$log"; then
-      return 0
-    fi
+    "$(ui_bin)" spin --title "$title" -- "${cmd[@]}" >"$log" 2>&1
+    rc=$?
+  else
+    "${cmd[@]}" >"$log" 2>&1
+    rc=$?
+  fi
+  _ui_cap_log "$log"
+  if [ "$rc" -ne 0 ]; then
     ui_tail_error "$title" "$log"
-    return 1
   fi
+  return "$rc"
+}
 
-  if bash -c "${prefix}eval \"\$1\" >\"\$2\" 2>&1" _ "$cmd" "$log"; then
-    return 0
-  fi
-  ui_tail_error "$title" "$log"
-  return 1
+# Compatibilidad: ui_logged aceptaba un string y ejecutaba eval. Se mantiene
+# el nombre pero NO ejecuta el string; avisa con un error claro para migrar.
+ui_logged() {
+  ui_error "ui_logged esta obsoleto (ejecutaba eval inseguro); usa ui_logged_argv <titulo> <cmd> [args...]"
+  return 2
 }
 
 # --- dependencias --------------------------------------------------------
@@ -465,40 +534,97 @@ ui_pkg_install_cmd() {
   esac
 }
 
+# ui_pkg_install_argv <paquete...>: prepara los argv del gestor. Se conserva
+# ui_pkg_install_cmd (devuelve un string) para scripts que aún lo usan.
+UI_PKG_ARGV=()
+UI_PKG_PRE_ARGV=()
+ui_pkg_install_argv() {
+  local mgr
+  local -a root=()
+  mgr="$(ui_pkg_manager)" || return 1
+  [ -n "$(ui_root_prefix)" ] && root=(sudo)
+  UI_PKG_ARGV=()
+  UI_PKG_PRE_ARGV=()
+  case "$mgr" in
+    apt-get)
+      UI_PKG_PRE_ARGV=("${root[@]}" apt-get update)
+      UI_PKG_ARGV=("${root[@]}" apt-get install -y --no-install-recommends "$@")
+      ;;
+    dnf) UI_PKG_ARGV=("${root[@]}" dnf install -y "$@") ;;
+    pacman) UI_PKG_ARGV=("${root[@]}" pacman -S --noconfirm "$@") ;;
+    zypper) UI_PKG_ARGV=("${root[@]}" zypper --non-interactive install "$@") ;;
+    apk) UI_PKG_ARGV=("${root[@]}" apk add --no-cache "$@") ;;
+    *) return 1 ;;
+  esac
+}
+
 ui_ensure_cmd() {
-  local cmd="$1" pkg="${2:-$1}" install_cmd
+  local cmd="$1" pkg="${2:-$1}"
   command -v "$cmd" >/dev/null 2>&1 && return 0
-  install_cmd="$(ui_pkg_install_cmd "$pkg")" || {
+  if ! ui_pkg_install_argv "$pkg"; then
     ui_warn "No hay gestor de paquetes conocido para instalar $pkg"
     return 1
-  }
-  ui_logged "Instalando $pkg..." "$install_cmd"
+  fi
+  if [ ${#UI_PKG_PRE_ARGV[@]} -gt 0 ]; then
+    ui_logged_argv "Actualizando indices de paquetes..." "${UI_PKG_PRE_ARGV[@]}" || true
+  fi
+  ui_logged_argv "Instalando $pkg..." "${UI_PKG_ARGV[@]}"
 }
 
 # --- SSH sin prompts -----------------------------------------------------
+# Las host keys se fijan desde el repo. Nunca se hace ssh-keyscan en caliente:
+# eso aceptaria un MITM silenciosamente.
 ui_seed_known_hosts() {
-  local host tmp_known
-  mkdir -p "$HOME/.ssh" 2>/dev/null || true
-  chmod 700 "$HOME/.ssh" 2>/dev/null || true
-  touch "$HOME/.ssh/known_hosts" 2>/dev/null || true
-  tmp_known="$(mktemp)"
-  for host in github.com bitbucket.org ssh.bitbucket.org; do
-    ssh-keyscan -t ed25519,rsa "$host" >> "$tmp_known" 2>/dev/null || true
-  done
-  if [ -s "$tmp_known" ]; then
-    sort -u "$HOME/.ssh/known_hosts" "$tmp_known" > "${tmp_known}.sorted" 2>/dev/null || true
-    if [ -s "${tmp_known}.sorted" ]; then
-      cat "${tmp_known}.sorted" > "$HOME/.ssh/known_hosts" 2>/dev/null || true
-    fi
+  local src="${REPO_DIR:-}/config/ssh/known_hosts"
+  if [ ! -f "$src" ]; then
+    ui_error "Falta el pin de host keys en $src; no se hara ssh-keyscan"
+    return 1
   fi
-  rm -f "$tmp_known" "${tmp_known}.sorted" 2>/dev/null || true
+  mkdir -p "$HOME/.ssh" 2>/dev/null || return 1
+  chmod 700 "$HOME/.ssh" 2>/dev/null || true
+  if [ -f "$HOME/.ssh/known_hosts" ] && command -v dotfiles_backup >/dev/null 2>&1; then
+    dotfiles_backup "$HOME/.ssh/known_hosts" \
+      || ui_warn "No se pudo respaldar ~/.ssh/known_hosts"
+  fi
+  # Fusionar (no sobrescribir): conservar hosts propios del usuario; las claves
+  # pinadas van primero para que tengan prioridad en StrictHostKeyChecking=yes.
+  local tmp
+  tmp="$(mktemp "$HOME/.ssh/.known_hosts.XXXXXX" 2>/dev/null)" || {
+    ui_error "No se pudo crear el temporal para known_hosts"
+    return 1
+  }
+  if ! {
+    cat "$src"
+    [ -f "$HOME/.ssh/known_hosts" ] && cat "$HOME/.ssh/known_hosts"
+  } | sort -u > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    ui_error "No se pudo fusionar $HOME/.ssh/known_hosts"
+    return 1
+  fi
+  chmod 600 "$tmp" 2>/dev/null || true
+  if ! mv -f "$tmp" "$HOME/.ssh/known_hosts"; then
+    rm -f "$tmp"
+    ui_error "No se pudo instalar $HOME/.ssh/known_hosts desde $src"
+    return 1
+  fi
+  return 0
 }
 
 ui_ssh_test() {
-  local title="$1" target="$2"
-  ui_seed_known_hosts
-  # GitHub/Bitbucket devuelven exit 1 incluso autenticando bien: evaluar por mensaje.
-  ui_logged "$title" "out=\$(ssh -T -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 '$target' 2>&1 || true); printf '%s\n' \"\$out\"; printf '%s\n' \"\$out\" | grep -Eiq 'successfully authenticated|authenticated via ssh key|logged in as'"
+  local title="$1" target="$2" log
+  ui_seed_known_hosts || return 1
+  # GitHub/Bitbucket devuelven exit 1 incluso autenticando bien: evaluar por
+  # mensaje leyendo el log. argv como array: $target nunca se interpola en un
+  # string de shell.
+  ui_logged_argv "$title" ssh -T \
+    -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10 \
+    "$target" || true
+  log="${UI_LAST_LOG:-}"
+  if [ -n "$log" ] && [ -f "$log" ] && \
+     grep -Eiq 'successfully authenticated|authenticated via ssh key|logged in as' "$log"; then
+    return 0
+  fi
+  return 1
 }
 
 # --- portapapeles y URLs sin dependencias de Windows ----------------------

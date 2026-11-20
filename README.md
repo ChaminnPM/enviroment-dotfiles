@@ -9,12 +9,51 @@ Incluye un tema canonico (**Dracula + JetBrainsMono Nerd Font**) que se aplica
 a todas las herramientas durante la instalacion, incluida la instalacion de
 la fuente.
 
-## One-liner
+## Instalacion (verificada, recomendada)
+
+El instalador es **fail-closed**: exige `REPO_SHA256` para el tarball y
+`NVM_SHA256`, `NEOVIM_SHA256`, `OPENCODE_SHA256` y `HERDR_SHA256` para los
+instaladores remotos. El one-liner clásico solo funciona con
+`NUI_ALLOW_UNVERIFIED=1` (opt-out **inseguro**), así que la forma recomendada es
+descargar, verificar y ejecutar:
+
 ```bash
+curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/SHA256SUMS -o /tmp/nui-SHA256SUMS
+curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh -o /tmp/nui-install.sh
+( cd /tmp && sha256sum -c --ignore-missing nui-SHA256SUMS ) || exit 1
+REPO_SHA256="$(curl -fsSL --retry 3 --max-time 600 \
+  https://github.com/ChaminnPM/enviroment-dotfiles/archive/refs/heads/main.tar.gz \
+  | sha256sum | awk '{print $1}')" \
+  NVM_SHA256='…' NEOVIM_SHA256='…' OPENCODE_SHA256='…' HERDR_SHA256='…' \
+  bash /tmp/nui-install.sh
+```
+
+`SHA256SUMS` (raíz, generado con `bash scripts/gen-checksums.sh`) cubre los
+scripts de instalación; `bin/SHA256SUMS` cubre los binarios de `nui`, que están
+vendorizados y se verifican antes de instalarse.
+
+El instalador descarga el repo como **tarball** y no requiere `git` para empezar. Luego `bootstrap.sh` instala dependencias base (`git`, `curl`, `python3`, `tar`, `gzip`, `rsync`, `openssh-client`, etc.) antes de los pasos que las necesitan.
+
+### One-liner heredado (sin verificacion, desaconsejado)
+
+```bash
+export NUI_ALLOW_UNVERIFIED=1
 curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh | bash
 ```
 
-El one-liner descarga el repo como **tarball** y no requiere `git` para empezar. Luego `bootstrap.sh` instala dependencias base (`git`, `curl`, `python3`, `tar`, `gzip`, `rsync`, `openssh-client`, etc.) antes de los pasos que las necesitan.
+Solo para entornos de prueba; En producción usa la instalación verificada de arriba.
+
+## Seguridad
+
+- Host keys de GitHub/Bitbucket **pinadas** en `config/ssh/known_hosts` (chmod
+  `0600`), installadas con backup y sin `ssh-keyscan` ni
+  `StrictHostKeyChecking=accept-new`.
+- Sin `eval` ni `bash -c` con variables interpoladas: el runner usa
+  `ui_logged_argv <titulo> <cmd> [args...]` y los comandos se pasan como argv.
+- Logs y archivos `result-NN.env` se crean con `0600` dentro de directorios
+  `0700`.
+- El wrapper `sync-dotfiles` ya no ejecuta código remoto con `bash <(curl …)`;
+  clona el repo en un temporal (`SYNC_REF`/`SYNC_SHA`) y ejecuta el script local.
 
 ## Orden actual de instalacion
 1. Verificar herramientas minimas para descargar/instalar: `curl`, `tar`, `gzip`.
@@ -79,7 +118,7 @@ y `VERBOSE=1` como variables de entorno.
 - `config/alacritty/`: plantillas TOML (requiere alacritty >= 0.13) generadas desde `config/theme/dracula.env`. `common.toml.tpl` lleva fuente y paleta; `linux.toml.tpl` y `windows-wsl.toml.tpl` son overlays segun el entorno (`DOTFILES_ENV`). Solo se instala si `alacritty` esta en el PATH y no hay configuracion previa no gestionada.
 - `agents/`: `net-qa`, `react-qa`, `lua-qa`. (`analyze-webrtc-dumps` vive en el repo privado.)
 - `skills/`: `generate-test-cases`, `generate-tests`, `graphify` (externa), `security-audit` (externa).
-- `plugins/`: `herdr-agent-state.js`, `usage-limits`.
+- `plugins/`: `herdr-agent-state.js`. Los plugins de paquete se declaran en `opencode.jsonc`.
 - `memory/skills-best-practices.md`: guia de escritura de skills/agents.
 - `AGENTS.md`: instrucciones generales con graphify.
 - `scripts/`: instalacion, sincronizacion, identidad Git y actualizacion de skills externas.

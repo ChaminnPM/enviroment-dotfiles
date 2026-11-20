@@ -215,9 +215,12 @@ func (m inputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m inputModel) View() string { return m.ti.View() }
 
+// cmdInput muestra el campo interactivo cuando hay TTY. Sin TTY lee una linea
+// de stdin: por defecto la escribe en stdout (command substitution); con
+// --no-echo la descarta sin imprimirla.
 func cmdInput(args []string) {
 	prompt, placeholder, value := "", "", ""
-	password := false
+	password, noEcho := false, false
 	width := 40
 
 	for i := 0; i < len(args); i++ {
@@ -238,6 +241,8 @@ func cmdInput(args []string) {
 			value = next()
 		case "--password":
 			password = true
+		case "--no-echo":
+			noEcho = true
 		case "--width":
 			width, _ = strconv.Atoi(next())
 		default:
@@ -249,6 +254,9 @@ func cmdInput(args []string) {
 	defer closer()
 	if !ok {
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if noEcho {
+			return
+		}
 		fmt.Print(strings.TrimRight(line, "\r\n"))
 		return
 	}
