@@ -95,6 +95,26 @@ theme_font_installed() {
   printf '%s' "$match" | grep -Fqi "$THEME_FONT_FAMILY"
 }
 
+# fontconfig puede no ver la fuente aunque los TTF esten en disco (cache
+# desactualizada, HOME distinto durante fc-cache, sesion sin fontconfig). En ese
+# caso no debe abortarse toda la instalacion: basta un aviso.
+theme_font_files_present() {
+  local dest="$HOME/.local/share/fonts" f
+  for f in "$dest"/JetBrainsMono*NerdFont*.ttf "$dest"/JetBrainsMono*NerdFont*.otf; do
+    [ -f "$f" ] && return 0
+  done
+  return 1
+}
+
+theme_font_ok() {
+  if theme_font_installed; then return 0; fi
+  if theme_font_files_present; then
+    printf '##warn La fuente esta en disco pero fontconfig no la ve todavia; ejecuta fc-cache -f\n'
+    return 0
+  fi
+  return 1
+}
+
 theme_write_manifest() {
   local dir="$HOME/.config/enviroment-dotfiles" out
   mkdir -p "$dir" 2>/dev/null || return 0
@@ -118,6 +138,17 @@ theme_ensure_font() {
     printf '##log Fuente %s ya instalada\n' "$THEME_FONT_FAMILY"
     theme_write_manifest
     return 0
+  fi
+  if theme_font_files_present; then
+    printf '##log TTFs presentes; refrescando cache de fontconfig\n'
+    if command -v fc-cache >/dev/null 2>&1; then
+      fc-cache -f "$HOME/.local/share/fonts" >/dev/null 2>&1 || true
+      fc-cache -f >/dev/null 2>&1 || true
+    fi
+    if theme_font_ok; then
+      theme_write_manifest
+      return 0
+    fi
   fi
 
   if ! command -v curl >/dev/null 2>&1; then
@@ -167,13 +198,26 @@ PY
   printf '##log TTFs extraidos en %s\n' "$dest"
 
   if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f "$dest" >/dev/null 2>&1 || true
     fc-cache -f >/dev/null 2>&1 || true
   else
     printf '##log fontconfig no disponible; TTFs copiados a %s\n' "$dest"
   fi
 
-  if theme_font_installed; then
-    printf '##log Fuente %s instalada (%s)\n' "$THEME_FONT_FAMILY" "$THEME_NERD_VERSION"
+  # La cache puede tardar un instante en propagarse: reintentar antes de dar
+  # por fallido el paso (antes un solo fc-match abortaba toda la instalacion).
+  local attempt
+  for attempt in 1 2 3; do
+    if theme_font_installed; then
+      printf '##log Fuente %s instalada (%s)\n' "$THEME_FONT_FAMILY" "$THEME_NERD_VERSION"
+      theme_write_manifest
+      return 0
+    fi
+    [ "$attempt" -lt 3 ] && sleep 1 2>/dev/null || true
+  done
+
+  if theme_font_files_present; then
+    printf '##warn TTFs instalados en %s pero fontconfig no los ve; ejecuta fc-cache -f\n' "$dest"
     theme_write_manifest
     return 0
   fi
