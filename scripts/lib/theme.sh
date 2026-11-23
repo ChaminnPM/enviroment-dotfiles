@@ -97,7 +97,7 @@ theme_font_installed() {
 
 # fontconfig puede no ver la fuente aunque los TTF esten en disco (cache
 # desactualizada, HOME distinto durante fc-cache, sesion sin fontconfig). En ese
-# caso no debe abortarse toda la instalacion: basta un aviso.
+# caso se refresca la cache y se reintenta; solo si sigue sin verse se avisa.
 theme_font_files_present() {
   local dest="$HOME/.local/share/fonts" f
   for f in "$dest"/JetBrainsMono*NerdFont*.ttf "$dest"/JetBrainsMono*NerdFont*.otf; do
@@ -106,10 +106,30 @@ theme_font_files_present() {
   return 1
 }
 
+# Refresca la cache de fontconfig de verdad (no se limita a pedirlo en un aviso).
+theme_font_refresh_cache() {
+  command -v fc-cache >/dev/null 2>&1 || return 0
+  local dest="$HOME/.local/share/fonts"
+  if [ -d "$dest" ]; then
+    fc-cache -f "$dest" >/dev/null 2>&1 || true
+  fi
+  fc-cache -f >/dev/null 2>&1 || true
+}
+
 theme_font_ok() {
   if theme_font_installed; then return 0; fi
   if theme_font_files_present; then
-    printf '##warn La fuente esta en disco pero fontconfig no la ve todavia; ejecuta fc-cache -f\n'
+    printf '##log TTFs en disco pero fontconfig no los ve; refrescando cache\n'
+    theme_font_refresh_cache
+    local attempt
+    for attempt in 1 2 3; do
+      if theme_font_installed; then
+        printf '##log Fuente visible tras refrescar la cache de fontconfig\n'
+        return 0
+      fi
+      [ "$attempt" -lt 3 ] && sleep 1 2>/dev/null || true
+    done
+    printf '##warn La fuente esta en disco pero fontconfig sigue sin verla tras refrescar la cache; se indexara en el proximo arranque\n'
     return 0
   fi
   return 1
@@ -140,11 +160,6 @@ theme_ensure_font() {
     return 0
   fi
   if theme_font_files_present; then
-    printf '##log TTFs presentes; refrescando cache de fontconfig\n'
-    if command -v fc-cache >/dev/null 2>&1; then
-      fc-cache -f "$HOME/.local/share/fonts" >/dev/null 2>&1 || true
-      fc-cache -f >/dev/null 2>&1 || true
-    fi
     if theme_font_ok; then
       theme_write_manifest
       return 0
@@ -198,8 +213,7 @@ PY
   printf '##log TTFs extraidos en %s\n' "$dest"
 
   if command -v fc-cache >/dev/null 2>&1; then
-    fc-cache -f "$dest" >/dev/null 2>&1 || true
-    fc-cache -f >/dev/null 2>&1 || true
+    theme_font_refresh_cache
   else
     printf '##log fontconfig no disponible; TTFs copiados a %s\n' "$dest"
   fi
@@ -217,7 +231,7 @@ PY
   done
 
   if theme_font_files_present; then
-    printf '##warn TTFs instalados en %s pero fontconfig no los ve; ejecuta fc-cache -f\n' "$dest"
+    printf '##warn TTFs instalados en %s pero fontconfig no los ve tras refrescar la cache; se indexaran en el proximo arranque\n' "$dest"
     theme_write_manifest
     return 0
   fi
