@@ -221,8 +221,10 @@ PY
     theme_write_manifest
     return 0
   fi
+  # Los TTFs ya estan instalados: fontconfig los indexara tras el refresco de
+  # cache (o en el proximo arranque). Es un aviso, no un error fatal.
   printf '##warn La fuente no es visible para fontconfig; revisa %s\n' "$dest"
-  return 1
+  return 0
 }
 
 # --- plantillas ------------------------------------------------------------

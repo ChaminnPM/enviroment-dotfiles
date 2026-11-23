@@ -61,7 +61,7 @@ Solo para entornos de prueba; En producción usa la instalación verificada de a
 3. Ejecutar `bootstrap.sh`.
 4. `bootstrap.sh`:
    - Instala `git` y dependencias base si faltan (paquetes de escritorio solo si hay `DISPLAY`/`WAYLAND_DISPLAY`).
-   - **Fuente**: instala JetBrainsMono Nerd Font (`v3.4.0`) en `~/.local/share/fonts` si `fc-match` no la encuentra; es idempotente.
+   - **Fuente**: instala JetBrainsMono Nerd Font (`v3.4.0`) en `~/.local/share/fonts` si `fc-match` no la encuentra; es idempotente. Es un paso opcional: si falla la descarga, la extracción o `fontconfig` aún no la ve, se registra un aviso y la instalación continúa (los TTFs ya copiados se indexan en el próximo refresco de caché).
    - Instala `nui` (binario propio con [bubbletea](https://github.com/charmbracelet/bubbletea)) si falta o si la version instalada difiere de `bin/VERSION`, y lo usa para banners, spinners y prompts.
    - Configura las cuentas Git: personal obligatoria y hasta 3 espacios opcionales con carpeta propia (ver "Cuentas Git" mas abajo). Para omitirlo:
      ```bash

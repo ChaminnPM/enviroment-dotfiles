@@ -235,7 +235,10 @@ EOF
 
 # La fuente se instala antes de configurar Alacritty para que el terminal
 # ya pueda renderizar los glifos Nerd desde el primer arranque.
-ui_panel_step "Fuente (JetBrains Mono Nerd)" --estimate 60 <<'EOF'
+# La fuente es cosmética: un fallo de descarga/extracción no debe abortar la
+# instalación. --optional convierte el error en aviso y continúa con los pasos
+# posteriores (nui markStepWarn y _ui_panel_run_plain report_warn).
+ui_panel_step "Fuente (JetBrains Mono Nerd)" --optional --estimate 60 <<'EOF'
 # shellcheck source=lib/theme.sh
 source "$REPO_DIR/scripts/lib/theme.sh"
 theme_load_env || exit 1
