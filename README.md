@@ -18,8 +18,8 @@ instaladores remotos. El one-liner clásico solo funciona con
 descargar, verificar y ejecutar:
 
 ```bash
-# Todo va dentro de ( ... ): un fallo solo termina este bloque, NO tu terminal.
-# No pegues un `exit 1` suelto en una shell interactiva: cerraria la sesion.
+# El bloque se ejecuta en un subshell: sus `exit` no afectan a la sesion
+# interactiva que invoca el comando.
 (
   set -euo pipefail
   base="https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main"
@@ -29,14 +29,14 @@ descargar, verificar y ejecutar:
   curl -fsSL --retry 3 "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"
   curl -fsSL --retry 3 "$base/install.sh"  -o "$tmp/install.sh"
 
-  # El archivo debe llamarse exactamente install.sh: es la clave del
-  # SHA256SUMS. Con otro nombre, --ignore-missing no verificaria nada.
+  # El nombre debe coincidir con la entrada "install.sh" del SHA256SUMS;
+  # --ignore-missing omitiria la comprobacion si el nombre difiriera.
   want="$(awk '$2 == "install.sh" { print $1; exit }' "$tmp/SHA256SUMS")"
   [ -n "$want" ] || { echo "[ERROR] SHA256SUMS no contiene install.sh" >&2; exit 1; }
   printf '%s  %s\n' "$want" "$tmp/install.sh" | sha256sum -c -
 
-  # Comodidad: calculamos el hash del tarball de la misma rama. install.sh lo
-  # vuelve a verificar con REPO_SHA256 antes de extraer absolutamente nada.
+  # El hash del tarball se calcula aqui para pasar REPO_SHA256. install.sh
+  # lo comprueba de nuevo antes de extraer el contenido.
   repo_url="https://github.com/ChaminnPM/enviroment-dotfiles/archive/refs/heads/main.tar.gz"
   repo_sha="$(curl -fsSL --retry 3 --max-time 600 "$repo_url" | sha256sum | awk '{print $1}')"
 
@@ -70,8 +70,8 @@ El instalador descarga el repo como **tarball** y no requiere `git` para empezar
 
 Los cuatro hashes se calculan desde las URLs oficiales fijadas en
 `bootstrap.sh`. Es un modelo *trust-on-first-use*: calcúlalos una vez, guárdalos
-en tu gestor de contraseñas y reutilízalos. Solo vuelve a calcularlos cuando
-actualices la versión fijada (`NVM_VERSION`, `NEOVIM_VERSION`, etc.).
+en un gestor de secretos y reutilízalos. Solo deben recalcularse cuando cambie
+la versión fijada (`NVM_VERSION`, `NEOVIM_VERSION`, etc.).
 
 ```bash
 # nvm (NVM_VERSION por defecto: v0.40.8)
@@ -105,9 +105,9 @@ export NUI_ALLOW_UNVERIFIED=1
 curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh | bash
 ```
 
-Solo para entornos de prueba; en producción usa la instalación verificada de
-arriba. Con este modo verás avisos `SIN verificar (NUI_ALLOW_UNVERIFIED=1:
-INSEGURO)` para neovim, nvm, OpenCode y herdr.
+Solo para entornos de prueba; en producción debe usarse la instalación
+verificada. Este modo produce avisos `SIN verificar
+(NUI_ALLOW_UNVERIFIED=1: INSEGURO)` para neovim, nvm, OpenCode y herdr.
 
 ## Seguridad
 
@@ -129,7 +129,7 @@ INSEGURO)` para neovim, nvm, OpenCode y herdr.
    - Instala `git` y dependencias base si faltan (paquetes de escritorio solo si hay `DISPLAY`/`WAYLAND_DISPLAY`).
    - **Fuente**: instala JetBrainsMono Nerd Font (`v3.4.0`) en `~/.local/share/fonts` si `fc-match` no la encuentra; es idempotente. Es un paso opcional: si falla la descarga o la extracción se registra un aviso y la instalación continúa. Si `fontconfig` aún no ve la fuente, el propio script ejecuta `fc-cache -f` y vuelve a comprobarlo antes de avisar.
    - Instala `nui` (binario propio con [bubbletea](https://github.com/charmbracelet/bubbletea)) si falta o si la version instalada difiere de `bin/VERSION`, y lo usa para banners, spinners y prompts.
-   - Configura las cuentas Git: personal obligatoria y hasta 3 espacios opcionales con carpeta propia (ver "Cuentas Git" mas abajo). Para omitirlo:
+   - Configura las cuentas Git: personal obligatoria y hasta 3 espacios opcionales con carpeta propia (ver la sección «Cuentas Git (SSH + includeIf)»). Para omitirlo:
      ```bash
      SKIP_GIT_IDENTITY=1 bash bootstrap.sh
      # o
@@ -172,15 +172,14 @@ dirigida, ejecuta los pasos en orden.
 
 ### Solución de problemas
 
-Todos los comandos `bash install.sh --only ...` de esta sección vuelven a
-descargar el repo, por lo que necesitan las mismas variables (`REPO_SHA256` y
-los pins) que el bloque seguro. Si `main` cambió entre la instalación y la
-reparación, recalcula `REPO_SHA256` como se muestra arriba.
+Los comandos `bash install.sh --only ...` vuelven a descargar el repositorio y
+necesitan las mismas variables (`REPO_SHA256` y los pins) que la instalación
+verificada. Si la rama `main` cambió, debe obtenerse un `REPO_SHA256` nuevo.
 
-**La terminal se cierra al ejecutar el comando de instalación.** Causa habitual:
-un `exit 1` pegado en una shell interactiva, o un `exec "$SHELL"`. Usa el bloque
-`( ... )` de arriba: sus `exit` solo afectan a ese subproceso. Para recuperar el
-PATH sin reemplazar la shell:
+**La sesión interactiva termina al ejecutar el instalador.** Un `exit 1` suelto
+o un `exec "$SHELL"` cierran o reemplazan la shell que invocó el comando. El
+bloque de instalación se ejecuta en un subshell para que sus `exit` queden
+confinados. El PATH puede cargarse sin reemplazar la shell:
 
 ```bash
 . "$HOME/.config/enviroment-dotfiles/env.sh"   # o abre una terminal nueva
@@ -194,8 +193,8 @@ sudo -v && sudo -n true
 bash install.sh --only "Dependencias base"
 ```
 
-**Aviso `La fuente esta en disco pero fontconfig sigue sin verla`.** El script ya
-ejecutó `fc-cache -f`; comprueba antes de volver a descargar:
+**Aviso `La fuente esta en disco pero fontconfig sigue sin verla`.** El paso
+refresca la caché automáticamente; estos comandos permiten diagnosticarlo:
 
 ```bash
 find "$HOME/.local/share/fonts" -maxdepth 1 -type f \( -iname '*JetBrains*' -o -iname '*.ttf' -o -iname '*.otf' \) -printf '%f\n'
@@ -204,7 +203,7 @@ fc-match "JetBrainsMono Nerd Font"
 fc-list | grep -i JetBrains | head
 ```
 
-Si no hay archivos, repite solo ese paso con `bash install.sh --only "Fuente"`.
+Si no hay archivos, ejecuta ese paso con `bash install.sh --only "Fuente"`.
 
 **Avisos `SIN verificar (NUI_ALLOW_UNVERIFIED=1: INSEGURO)`.** Significa que
 faltan pins. No son un fallo de npm ni de red: el instalador omitió la
@@ -219,9 +218,8 @@ bash install.sh --only "OpenCode"
 bash install.sh --only "herdr"
 ```
 
-**Aviso `npm install falló; revisa node_modules manualmente`.** El paso oculta la
-salida de npm, así que diagnostícalo a mano en el directorio de
-configuración de OpenCode:
+**Aviso `npm install falló; revisa node_modules manualmente`.** El paso guarda la
+salida de npm en los logs; para reproducirla de forma visible:
 
 ```bash
 command -v node && node --version
@@ -251,7 +249,7 @@ bash install.sh --only "Restaurar configuración"
   `~/.config/enviroment-dotfiles/env.sh`, que cada paso carga antes de ejecutar.
 
 ## Contenido publico
-- `config/opencode/`: config global de OpenCode, sin contenido Nuxiba.
+- `config/opencode/`: configuración global de OpenCode, sin credenciales ni contenido privado.
 - `config/theme/dracula.env`: fuente unica de verdad del tema (paleta, tipografia, pin de Nerd Font y colores de fzf/eza).
 - `config/alacritty/`: plantillas TOML (requiere alacritty >= 0.13) generadas desde `config/theme/dracula.env`. `common.toml.tpl` lleva fuente y paleta; `linux.toml.tpl` y `windows-wsl.toml.tpl` son overlays segun el entorno (`DOTFILES_ENV`). Solo se instala si `alacritty` esta en el PATH y no hay configuracion previa no gestionada.
 - `agents/`: `net-qa`, `react-qa`, `lua-qa`. (`analyze-webrtc-dumps` vive en el repo privado.)
@@ -280,8 +278,8 @@ Overrides utiles: `THEME_ENV_FILE`, `THEME_NERD_VERSION`, `THEME_NERD_REPO_URL`,
 ## service.json.example
 `service.json.example` es la plantilla de configuracion privada local. Se copia a
 `~/.config/opencode/service.json` (fuera del repo; el push lo excluye siempre) y se
-rellena con credenciales o ajustes que no deben versionarse. No existe en la
-instalacion hasta que la crees manualmente a partir del ejemplo.
+rellena con credenciales o ajustes que no deben versionarse. No se crea durante
+la instalación: debe generarse manualmente a partir del ejemplo.
 
 ## Cuentas Git (SSH + includeIf)
 `setup-git-identity.sh` configura **una cuenta personal obligatoria** y **hasta 3
@@ -291,7 +289,7 @@ cuentas opcionales** ("espacios"):
   actua en **todo el sistema** (`includeIf "gitdir:$HOME/"`) salvo en las carpetas
   de los espacios. Su plataforma (github/bitbucket) se pregunta en la instalacion.
 - **Espacios**: cada cuenta vive en una carpeta de `$HOME` cuyo nombre pide el
-  instalador (ej. `~/Nuxiba`). Tiene clave `id_ed25519_<slug>`, perfil
+  instalador (ej. `~/Trabajo`). Tiene clave `id_ed25519_<slug>`, perfil
   `~/.gitconfig-<slug>` y alias SSH `git-<slug>`. Dentro de la carpeta,
   `includeIf` cambia `user.name/email` y un bloque `url.insteadOf` reescribe los
   remotes de la plataforma al alias, de modo que los remotes se autentican con la
@@ -305,8 +303,8 @@ cuentas opcionales** ("espacios"):
 - **Validaciones**: el nombre del espacio se normaliza a slug (sin espacios ni
   acentos), se rechazan duplicados, nombres que empiezan por `.` y rutas con `/`
   (no se permiten carpetas anidadas entre espacios).
-- **Migracion (opt-in)**: si existia el esquema viejo (repos Nuxiba en
-  `~/Documents/Repositorios`) y hay exactamente una cuenta opcional, se puede
+- **Migracion (opt-in)**: si existía un esquema anterior (repositorios en una
+  carpeta legada como `~/Documents/Repositorios`) y hay una sola cuenta opcional, se puede
   mover su contenido a la carpeta del espacio. Ya **no** se hace de forma
   automatica: se pregunta en modo interactivo o se activa con
   `GIT_MIGRATE_LEGACY=1`; por defecto la carpeta legada se conserva intacta.
@@ -374,12 +372,12 @@ bash scripts/sync.sh push
 - En los formularios, `shift+tab` (o `↑`, y `←` en selecciones) vuelve al campo anterior conservando lo escrito; cambiar un campo anterior recalcula los campos condicionales.
 - La lista de pasos se puede recorrer con `↑/↓` en cualquier momento, incluso mientras uno se ejecuta o despues de terminar: el detalle sigue al cursor y `enter` fija/selta un paso (`◆`). Con un formulario abierto, `tab` lleva el foco a la lista de pasos (el panel derecho muestra el detalle del paso señalado) y `tab`/`esc` vuelve al formulario sin perder lo escrito; `ctrl+↑/↓` navega los pasos directamente. Al terminar, `tab` alterna entre el reporte final y la lista de pasos.
 - Los pasos opcionales (credenciales sudo, identidad Git, .NET) se pueden **omitir** con `esc` sin detener la instalacion; los prompts y selecciones se resuelven antes del panel solo cuando no hay TTY.
-- La prueba de llaves SSH es un paso opcional **despues** de generar las claves, para que puedas agregarlas a GitHub/Bitbucket antes de probar (tambien puede mostrarlas en el panel; si la prueba falla, la clave se muestra automaticamente).
+- La prueba de llaves SSH es un paso opcional posterior a la generación de claves; permite agregarlas a GitHub/Bitbucket antes de verificarlas. Las claves se muestran en el panel y quedan en `~/claves-ssh.txt`; se copian al portapapeles tanto si la prueba pasa como si falla.
 - Si el sistema necesita `apt`, el paso **Credenciales sudo** pide la contraseña en un TTY real para cachearla; si se omite, los pasos con apt se muestran como avisos con la salida de apt.
 - Cada paso emite `##progress N`, `##log T` y `##warn T` para el panel; la salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH se guarda en logs.
 - Al terminar, el **reporte final** (`INSTALADO` / `AVISOS` / `ERRORES`) se muestra como estado final dentro del panel; `q` sale (exit 1 si hay errores). `q`/`esc`/`ctrl+c` durante la ejecucion cancelan (exit 1).
 - Las cajas se ajustan al ancho de la terminal y el panel se adapta al tamano de la ventana.
-- SSH no debe pedir host key durante la instalación: se usan `ssh-keyscan` y `StrictHostKeyChecking=accept-new`.
+- SSH usa host keys pinadas en `config/ssh/known_hosts` con `StrictHostKeyChecking=yes` y `BatchMode=yes`; nunca `ssh-keyscan` ni `accept-new`.
 
 ## Modo verbose
 Por defecto el instalador oculta el ruido de `apt-get`, `npm`, `git clone`, OpenCode y herdr, guardando logs en:
@@ -399,4 +397,4 @@ El one-liner inicial usa un fallback silencioso antes de tener `nui`; cuando `nu
 
 - Los scripts usan `nui` para mejorar legibilidad y tienen fallback textual/ANSI.
 - `analyze-webrtc-dumps` es un **agente**, no una skill; se gestiona desde el repo privado.
-- El repo publico no debe contener assets Nuxiba privados.
+- El repositorio público no debe contener credenciales ni configuración privada.
