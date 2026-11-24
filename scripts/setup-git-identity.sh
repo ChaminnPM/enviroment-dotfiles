@@ -13,7 +13,7 @@
 #     Limitacion documentada: un repo personal clonado DENTRO de la carpeta de
 #     un espacio usara la clave de ese espacio para la plataforma de este.
 #   - Estado: ~/.config/git-accounts.sh (manifiesto generado; lo leen el paso
-#     'Probar llaves SSH' del bootstrap y 'sync-dotfiles doctor').
+#     'Registrar y probar llaves SSH' del bootstrap y 'sync-dotfiles doctor').
 #   - ~/.ssh/config: solo se regenera la seccion entre los marcadores
 #     "# >>> dotfiles-managed" / "# <<< dotfiles-managed"; el resto se
 #     conserva (el bloque gestionado va primero y tiene prioridad en ssh).
@@ -502,14 +502,9 @@ if [ -f "$HOME/claves-ssh.txt" ]; then
   say "Todas las claves publicas guardadas en ~/claves-ssh.txt (0600)"
 fi
 
-if ui_copy_clip < "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null; then
-  say "Clave personal copiada al portapapeles; pegala en $(platform_url "$P_PLATFORM")"
-  if ui_open_url "$(platform_url "$P_PLATFORM")" 2>/dev/null; then
-    say "Abriendo la pagina para pegarla"
-  fi
-fi
+say "Las claves se procesaran una a una en el paso 'Registrar y probar llaves SSH'."
 if [ "${#ACC_SLUG[@]}" -gt 0 ]; then
-  say "Las claves de los espacios se copian en el paso 'Probar llaves SSH' (y estan en ~/claves-ssh.txt)."
+  say "Cada llave sera copiada, su plataforma sera abierta y se pedira confirmacion antes de probarla."
 fi
 
 # --- comprobacion SSH (solo standalone) ---------------------------------------
@@ -529,13 +524,10 @@ ssh_check() {
   return 1
 }
 
-if [ "$PANEL_MODE" != "1" ] && [ "${NUI_NONINTERACTIVE:-0}" != "1" ] && ui_interactive && ui_ask "¿Probar la conexion SSH ahora?"; then
-  ssh_check "SSH personal ($P_PLATFORM)" "git@$(platform_host "$P_PLATFORM")" || true
-  for idx in $(ok_indices); do
-    ssh_check "SSH ${ACC_ESPACIO[$idx]}" "git@git-${ACC_SLUG[$idx]}" || true
-  done
+if [ "$PANEL_MODE" != "1" ] && [ "${NUI_NONINTERACTIVE:-0}" != "1" ] && ui_interactive; then
+  say "Claves preparadas. Usa el paso 'Registrar y probar llaves SSH' para copiarlas, abrir cada plataforma y comprobarlas una a una."
 else
-  say "Prueba SSH omitida (pruébala despues con: ssh -T git@$(platform_host "$P_PLATFORM"))."
+  say "Claves preparadas. Ejecuta el paso interactivo 'Registrar y probar llaves SSH' para registrarlas y comprobarlas."
 fi
 
 say "Configuracion de identidad completada."

@@ -291,20 +291,7 @@ INPUTS
 bash "$REPO_DIR/scripts/setup-git-identity.sh"
 EOF
 
-  ui_panel_inputs <<'INPUTS'
-confirm probar Probar conexion SSH ahora? y
-INPUTS
-  ui_panel_step "Probar llaves SSH" --optional --estimate 40 <<'EOF'
-if [ -z "${NUI_STEP_RESULT:-}" ] || [ ! -f "$NUI_STEP_RESULT" ]; then
-  echo "##log Sin respuestas (modo no interactivo); prueba omitida"
-  exit 0
-fi
-. "$NUI_STEP_RESULT"
-
-if [ "${probar:-true}" != "true" ]; then
-  echo "##log Prueba SSH omitida por el usuario"
-  exit 0
-fi
+  ui_panel_step "Registrar y probar llaves SSH" --optional --interactive --estimate 40 <<'EOF'
 
 # ui_copy_clip / ui_open_url son funciones de ui.sh y no se heredan entre
 # procesos: cargarlas aqui (antes este paso las llamaba sin tenerlas).
@@ -327,20 +314,21 @@ platform_url() {
 }
 
 show_key() {
-  local file="$1" url="$2"
-  echo "##log Clave publica ($file):"
+  local title="$1" file="$2" url="$3"
+  echo "##title $title"
+  echo "##log Llave publica de $title:"
   while IFS= read -r l; do echo "##log $l"; done < "$file" 2>/dev/null || true
   if ui_copy_clip < "$file" 2>/dev/null; then
-    echo "##log Copiada al portapapeles; pegala en $url"
-    if ui_open_url "$url" 2>/dev/null; then
-      echo "##log Abriendo la pagina para pegarla"
-    fi
+    echo "##log Llave $title copiada al portapapeles"
   else
-    echo "##log Sin portapapeles; copia la linea de arriba a mano"
-    { printf '=== %s (pegar en %s)\n' "$(basename "$file")" "$url"; cat "$file" 2>/dev/null; } \
-      >> "$HOME/claves-ssh.txt" 2>/dev/null || true
-    echo "##log Respaldo: ~/claves-ssh.txt"
+    echo "##warn No hay portapapeles disponible; copia la linea publica mostrada arriba"
   fi
+  if ui_open_url "$url" 2>/dev/null; then
+    echo "##log Plataforma abierta: $url"
+  else
+    echo "##log Abre manualmente: $url"
+  fi
+  echo "##log Pega la llave como una NUEVA llave SSH en la plataforma"
 }
 
 ssh_test() {
@@ -362,38 +350,49 @@ ssh_test() {
 }
 
 test_account() {
-  local title="$1" target="$2" keyfile="$3" platform="$4"
+  local title="$1" target="$2" keyfile="$3" platform="$4" order="$5"
   if [ ! -f "$keyfile" ]; then
     echo "##log $title sin clave ($keyfile); omitido"
     return 0
   fi
-  ssh_test "$title" "$target" || true
-  # Copiar la publica siempre: que la prueba SSH salga bien o mal no debe
-  # decidir que claves puede copiar el usuario (antes solo se copiaba la
-  # personal y las demas dependian de que la prueba fallara).
-  show_key "$keyfile" "$(platform_url "$platform")"
+
+  echo "##progress $((order * 100 / ACCOUNT_COUNT))"
+  show_key "$title" "$keyfile" "$(platform_url "$platform")"
+
+  if ui_ask "Llave $order/$ACCOUNT_COUNT registrada y guardada en $title. Comprobar ahora?"; then
+    ssh_test "$title" "$target" || true
+  else
+    echo "##log Comprobacion de $title omitida; puedes volver a ejecutar este paso"
+  fi
+  echo
 }
 
+ACCOUNT_COUNT=1
+for _slug_count in ${GIT_ACCOUNT_SLUGS:-}; do
+  ACCOUNT_COUNT=$((ACCOUNT_COUNT + 1))
+done
+export ACCOUNT_COUNT
+
+ACCOUNT_ORDER=1
 case "$PERSONAL_PLATFORM" in
   bitbucket)
-    test_account "SSH personal (Bitbucket)" git@bitbucket.org "$HOME/.ssh/id_ed25519_personal.pub" bitbucket
+    test_account "Cuenta personal (Bitbucket)" git@bitbucket.org "$HOME/.ssh/id_ed25519_personal.pub" bitbucket "$ACCOUNT_ORDER"
     ;;
   *)
-    test_account "SSH personal (GitHub)" git@github.com "$HOME/.ssh/id_ed25519_personal.pub" github
+    test_account "Cuenta personal (GitHub)" git@github.com "$HOME/.ssh/id_ed25519_personal.pub" github "$ACCOUNT_ORDER"
     ;;
 esac
 
 for slug in ${GIT_ACCOUNT_SLUGS:-}; do
+  ACCOUNT_ORDER=$((ACCOUNT_ORDER + 1))
   u="$(printf '%s' "$slug" | tr 'a-z-' 'A-Z_')"
-  # Expansion indirecta (bash 4+): nunca evaluar el nombre construido.
-  # Aqui no hay funcion: `local` fallaria con "can only be used in a function"
-  # y abortaria el paso antes de probar las cuentas adicionales.
   var_esp="ACC_${u}_ESPACIO" var_pf="ACC_${u}_PLATFORM"
   esp="${!var_esp:-}"
   pf="${!var_pf:-github}"
-  test_account "SSH $esp" "git@git-$slug" "$HOME/.ssh/id_ed25519_$slug.pub" "$pf"
+  test_account "Espacio $esp" "git@git-$slug" "$HOME/.ssh/id_ed25519_$slug.pub" "$pf" "$ACCOUNT_ORDER"
 done
-echo "##log Prueba SSH finalizada"
+echo "##progress 100"
+echo "##log Registro y comprobacion SSH finalizados"
 EOF
 else
   ui_panel_note "Identidad Git omitida (--skip-git)"

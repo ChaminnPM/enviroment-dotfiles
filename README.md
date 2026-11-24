@@ -295,8 +295,9 @@ cuentas opcionales** ("espacios"):
   remotes de la plataforma al alias, de modo que los remotes se autentican con la
   clave de esa cuenta aunque la plataforma coincida con la de la personal.
 - **Estado**: el resultado queda en `~/.config/git-accounts.sh` (manifiesto
-  generado). El paso "Probar llaves SSH" del bootstrap y `sync-dotfiles doctor`
-  lo leen; para agregar/renombrar cuentas, relanza `bootstrap.sh`.
+  generado). El paso "Registrar y probar llaves SSH" del bootstrap y
+  `sync-dotfiles doctor` lo leen; para agregar/renombrar cuentas, relanza
+  `bootstrap.sh`.
 - **`~/.ssh/config`**: solo se regenera la seccion entre los marcadores
   `# >>> dotfiles-managed` / `# <<< dotfiles-managed`; cualquier bloque propio
   del usuario fuera de los marcadores se conserva.
@@ -372,7 +373,13 @@ bash scripts/sync.sh push
 - En los formularios, `shift+tab` (o `↑`, y `←` en selecciones) vuelve al campo anterior conservando lo escrito; cambiar un campo anterior recalcula los campos condicionales.
 - La lista de pasos se puede recorrer con `↑/↓` en cualquier momento, incluso mientras uno se ejecuta o despues de terminar: el detalle sigue al cursor y `enter` fija/selta un paso (`◆`). Con un formulario abierto, `tab` lleva el foco a la lista de pasos (el panel derecho muestra el detalle del paso señalado) y `tab`/`esc` vuelve al formulario sin perder lo escrito; `ctrl+↑/↓` navega los pasos directamente. Al terminar, `tab` alterna entre el reporte final y la lista de pasos.
 - Los pasos opcionales (credenciales sudo, identidad Git, .NET) se pueden **omitir** con `esc` sin detener la instalacion; los prompts y selecciones se resuelven antes del panel solo cuando no hay TTY.
-- La prueba de llaves SSH es un paso opcional posterior a la generación de claves; permite agregarlas a GitHub/Bitbucket antes de verificarlas. Las claves se muestran en el panel y quedan en `~/claves-ssh.txt`; se copian al portapapeles tanto si la prueba pasa como si falla.
+- El paso **Registrar y probar llaves SSH** es interactivo y recorre las cuentas en orden:
+  1. copia cada clave pública al portapapeles;
+  2. abre la página de claves SSH de GitHub o Bitbucket;
+  3. pide confirmar que la llave fue registrada;
+  4. ejecuta `ssh -T` para esa cuenta;
+  5. continúa con la siguiente llave solo después de procesar la actual.
+  La lista, la llave activa y el resultado permanecen visibles en el panel. Las claves también quedan respaldadas en `~/claves-ssh.txt`. Si no hay portapapeles, se muestra la clave pública para copiarla manualmente.
 - Si el sistema necesita `apt`, el paso **Credenciales sudo** pide la contraseña en un TTY real para cachearla; si se omite, los pasos con apt se muestran como avisos con la salida de apt.
 - Cada paso emite `##progress N`, `##log T` y `##warn T` para el panel; la salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH se guarda en logs.
 - Al terminar, el **reporte final** (`INSTALADO` / `AVISOS` / `ERRORES`) se muestra como estado final dentro del panel; `q` sale (exit 1 si hay errores). `q`/`esc`/`ctrl+c` durante la ejecucion cancelan (exit 1).
