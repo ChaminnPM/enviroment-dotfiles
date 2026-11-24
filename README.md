@@ -18,21 +18,85 @@ instaladores remotos. El one-liner clásico solo funciona con
 descargar, verificar y ejecutar:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/SHA256SUMS -o /tmp/nui-SHA256SUMS
-curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh -o /tmp/nui-install.sh
-( cd /tmp && sha256sum -c --ignore-missing nui-SHA256SUMS ) || exit 1
-REPO_SHA256="$(curl -fsSL --retry 3 --max-time 600 \
-  https://github.com/ChaminnPM/enviroment-dotfiles/archive/refs/heads/main.tar.gz \
-  | sha256sum | awk '{print $1}')" \
-  NVM_SHA256='…' NEOVIM_SHA256='…' OPENCODE_SHA256='…' HERDR_SHA256='…' \
-  bash /tmp/nui-install.sh
+# Todo va dentro de ( ... ): un fallo solo termina este bloque, NO tu terminal.
+# No pegues un `exit 1` suelto en una shell interactiva: cerraria la sesion.
+(
+  set -euo pipefail
+  base="https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main"
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+
+  curl -fsSL --retry 3 "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"
+  curl -fsSL --retry 3 "$base/install.sh"  -o "$tmp/install.sh"
+
+  # El archivo debe llamarse exactamente install.sh: es la clave del
+  # SHA256SUMS. Con otro nombre, --ignore-missing no verificaria nada.
+  want="$(awk '$2 == "install.sh" { print $1; exit }' "$tmp/SHA256SUMS")"
+  [ -n "$want" ] || { echo "[ERROR] SHA256SUMS no contiene install.sh" >&2; exit 1; }
+  printf '%s  %s\n' "$want" "$tmp/install.sh" | sha256sum -c -
+
+  # Comodidad: calculamos el hash del tarball de la misma rama. install.sh lo
+  # vuelve a verificar con REPO_SHA256 antes de extraer absolutamente nada.
+  repo_url="https://github.com/ChaminnPM/enviroment-dotfiles/archive/refs/heads/main.tar.gz"
+  repo_sha="$(curl -fsSL --retry 3 --max-time 600 "$repo_url" | sha256sum | awk '{print $1}')"
+
+  REPO_SHA256="$repo_sha" \
+  NVM_SHA256="${NVM_SHA256:?define NVM_SHA256}" \
+  NEOVIM_SHA256="${NEOVIM_SHA256:?define NEOVIM_SHA256}" \
+  OPENCODE_SHA256="${OPENCODE_SHA256:?define OPENCODE_SHA256}" \
+  HERDR_SHA256="${HERDR_SHA256:?define HERDR_SHA256}" \
+    bash "$tmp/install.sh"
+)
 ```
+
+La forma correcta de cargar el PATH y NVM al terminar es abrir una terminal
+nueva, o sourcear el archivo de entorno en la actual:
+
+```bash
+. "$HOME/.config/enviroment-dotfiles/env.sh"
+```
+
+**No uses `exec "$SHELL"`**: reemplaza el proceso de la shell actual y, si la
+configuración de inicio falla o la terminal cierra al salir de esa shell, te
+deja fuera de la sesión.
 
 `SHA256SUMS` (raíz, generado con `bash scripts/gen-checksums.sh`) cubre los
 scripts de instalación; `bin/SHA256SUMS` cubre los binarios de `nui`, que están
 vendorizados y se verifican antes de instalarse.
 
 El instalador descarga el repo como **tarball** y no requiere `git` para empezar. Luego `bootstrap.sh` instala dependencias base (`git`, `curl`, `python3`, `tar`, `gzip`, `rsync`, `openssh-client`, etc.) antes de los pasos que las necesitan.
+
+### Como obtener los pins (una sola vez)
+
+Los cuatro hashes se calculan desde las URLs oficiales fijadas en
+`bootstrap.sh`. Es un modelo *trust-on-first-use*: calcúlalos una vez, guárdalos
+en tu gestor de contraseñas y reutilízalos. Solo vuelve a calcularlos cuando
+actualices la versión fijada (`NVM_VERSION`, `NEOVIM_VERSION`, etc.).
+
+```bash
+# nvm (NVM_VERSION por defecto: v0.40.8)
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | sha256sum
+
+# neovim (NEOVIM_VERSION por defecto: v0.11.4)
+curl -fsSL https://github.com/neovim/neovim/releases/download/v0.11.4/nvim-linux-x86_64.tar.gz | sha256sum
+# En arm64 usa nvim-linux-arm64.tar.gz. Si ese asset no existe, bootstrap
+# prueba nvim-linux64.tar.gz: calcula el hash de ese archivo en su lugar.
+
+# OpenCode
+curl -fsSL https://opencode.ai/v2/install | sha256sum
+
+# herdr
+curl -fsSL https://herdr.dev/install.sh | sha256sum
+```
+
+Luego exportalos antes del bloque de instalación:
+
+```bash
+export NVM_SHA256='...' NEOVIM_SHA256='...' OPENCODE_SHA256='...' HERDR_SHA256='...'
+```
+
+Si alguno falta o no coincide, el instalador se detiene **antes** de ejecutar
+ese instalador remoto. No lo eludas salvo en un entorno de prueba.
 
 ### One-liner heredado (sin verificacion, desaconsejado)
 
@@ -41,7 +105,9 @@ export NUI_ALLOW_UNVERIFIED=1
 curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh | bash
 ```
 
-Solo para entornos de prueba; En producción usa la instalación verificada de arriba.
+Solo para entornos de prueba; en producción usa la instalación verificada de
+arriba. Con este modo verás avisos `SIN verificar (NUI_ALLOW_UNVERIFIED=1:
+INSEGURO)` para neovim, nvm, OpenCode y herdr.
 
 ## Seguridad
 
@@ -98,6 +164,78 @@ bash install.sh --help          # o: bash bootstrap.sh --help
 `install.sh` acepta las mismas opciones y las reenvia a `bootstrap.sh`.
 Tambien puedes usar `NUI_DRY_RUN=1`, `NUI_NONINTERACTIVE=1`, `NUI_NO_COLOR=1`
 y `VERBOSE=1` como variables de entorno.
+
+`--only <texto>` filtra **solo por título** y no resuelve dependencias entre
+pasos: si vuelves a ejecutar `Node + nvm` sin `Dependencias base`, asumes que
+`curl`, `tar` y los permisos sudo ya están disponibles. Para una reparación
+dirigida, ejecuta los pasos en orden.
+
+### Solución de problemas
+
+Todos los comandos `bash install.sh --only ...` de esta sección vuelven a
+descargar el repo, por lo que necesitan las mismas variables (`REPO_SHA256` y
+los pins) que el bloque seguro. Si `main` cambió entre la instalación y la
+reparación, recalcula `REPO_SHA256` como se muestra arriba.
+
+**La terminal se cierra al ejecutar el comando de instalación.** Causa habitual:
+un `exit 1` pegado en una shell interactiva, o un `exec "$SHELL"`. Usa el bloque
+`( ... )` de arriba: sus `exit` solo afectan a ese subproceso. Para recuperar el
+PATH sin reemplazar la shell:
+
+```bash
+. "$HOME/.config/enviroment-dotfiles/env.sh"   # o abre una terminal nueva
+```
+
+**Aviso `Contraseña sudo no activa; el gestor de paquetes no instalara nada`.**
+Activa las credenciales y vuelve a ejecutar el paso:
+
+```bash
+sudo -v && sudo -n true
+bash install.sh --only "Dependencias base"
+```
+
+**Aviso `La fuente esta en disco pero fontconfig sigue sin verla`.** El script ya
+ejecutó `fc-cache -f`; comprueba antes de volver a descargar:
+
+```bash
+find "$HOME/.local/share/fonts" -maxdepth 1 -type f \( -iname '*JetBrains*' -o -iname '*.ttf' -o -iname '*.otf' \) -printf '%f\n'
+fc-cache -f "$HOME/.local/share/fonts" && fc-cache -f
+fc-match "JetBrainsMono Nerd Font"
+fc-list | grep -i JetBrains | head
+```
+
+Si no hay archivos, repite solo ese paso con `bash install.sh --only "Fuente"`.
+
+**Avisos `SIN verificar (NUI_ALLOW_UNVERIFIED=1: INSEGURO)`.** Significa que
+faltan pins. No son un fallo de npm ni de red: el instalador omitió la
+verificación de neovim, nvm, OpenCode o herdr. Desactiva la variable y vuelve
+a ejecutar con los hashes de la sección "Como obtener los pins":
+
+```bash
+unset NUI_ALLOW_UNVERIFIED
+# exporta NVM_SHA256, NEOVIM_SHA256, OPENCODE_SHA256, HERDR_SHA256
+bash install.sh --only "Node + nvm"
+bash install.sh --only "OpenCode"
+bash install.sh --only "herdr"
+```
+
+**Aviso `npm install falló; revisa node_modules manualmente`.** El paso oculta la
+salida de npm, así que diagnostícalo a mano en el directorio de
+configuración de OpenCode:
+
+```bash
+command -v node && node --version
+command -v npm && npm --version
+cd "$HOME/.config/opencode" && npm install
+```
+
+Casi siempre se debe a que Node/nvm no quedó en el PATH de la sesión actual
+(sourcea el env file o abre una terminal nueva) o a que los instaladores se
+ejecutaron sin verificar. Después repite:
+
+```bash
+bash install.sh --only "Restaurar configuración"
+```
 
 ### Respaldos y bloques gestionados
 - Antes de modificar un archivo se crea una copia en

@@ -123,7 +123,7 @@ export APT_PKGS_STR
 # --- plan de pasos -------------------------------------------------------
 ui_panel_begin
 ui_panel_note "Comandos: sync-dotfiles pull/push"
-ui_panel_note "Ejecuta: exec \$SHELL"
+ui_panel_note "Carga el PATH en la terminal actual con: . ~/.config/enviroment-dotfiles/env.sh  (o abre una terminal nueva; no uses exec \$SHELL: reemplaza la shell y puede cerrar la terminal)"
 
 ui_panel_step "Credenciales sudo" --optional --interactive --estimate 15 <<'EOF'
 if [ -z "${APT_PREFIX:-}" ]; then
