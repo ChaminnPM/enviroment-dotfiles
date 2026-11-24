@@ -384,7 +384,9 @@ esac
 for slug in ${GIT_ACCOUNT_SLUGS:-}; do
   u="$(printf '%s' "$slug" | tr 'a-z-' 'A-Z_')"
   # Expansion indirecta (bash 4+): nunca evaluar el nombre construido.
-  local var_esp="ACC_${u}_ESPACIO" var_pf="ACC_${u}_PLATFORM"
+  # Aqui no hay funcion: `local` fallaria con "can only be used in a function"
+  # y abortaria el paso antes de probar las cuentas adicionales.
+  var_esp="ACC_${u}_ESPACIO" var_pf="ACC_${u}_PLATFORM"
   esp="${!var_esp:-}"
   pf="${!var_pf:-github}"
   test_account "SSH $esp" "git@git-$slug" "$HOME/.ssh/id_ed25519_$slug.pub" "$pf"
