@@ -483,33 +483,33 @@ for idx in $(ok_indices); do
 done
 say "Guarda las claves publicas en tus plataformas."
 
-copied=0
+# Todas las claves publicas quedan siempre en ~/claves-ssh.txt (0600), haya o
+# no portapapeles: asi ninguna queda inaccesible aunque la prueba SSH salga bien.
+claves_tmp="$(mktemp)"
+{
+  printf '=== Personal/%s (pegar en %s)\n' "$P_PLATFORM" "$(platform_url "$P_PLATFORM")"
+  cat "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null
+  for idx in $(ok_indices); do
+    slug="${ACC_SLUG[$idx]}"
+    printf '=== %s/%s (pegar en %s)\n' "${ACC_ESPACIO[$idx]}" "${ACC_PLATFORM[$idx]}" "$(platform_url "${ACC_PLATFORM[$idx]}")"
+    cat "$HOME/.ssh/id_ed25519_$slug.pub" 2>/dev/null
+  done
+} > "$claves_tmp"
+dotfiles_backup "$HOME/claves-ssh.txt" || true
+dotfiles_atomic_write "$HOME/claves-ssh.txt" 600 < "$claves_tmp"
+rm -f "$claves_tmp"
+if [ -f "$HOME/claves-ssh.txt" ]; then
+  say "Todas las claves publicas guardadas en ~/claves-ssh.txt (0600)"
+fi
+
 if ui_copy_clip < "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null; then
   say "Clave personal copiada al portapapeles; pegala en $(platform_url "$P_PLATFORM")"
   if ui_open_url "$(platform_url "$P_PLATFORM")" 2>/dev/null; then
     say "Abriendo la pagina para pegarla"
   fi
-  copied=1
-else
-  claves_tmp="$(mktemp)"
-  {
-    printf '=== Personal/%s (pegar en %s)\n' "$P_PLATFORM" "$(platform_url "$P_PLATFORM")"
-    cat "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null
-    for idx in $(ok_indices); do
-      slug="${ACC_SLUG[$idx]}"
-      printf '=== %s/%s (pegar en %s)\n' "${ACC_ESPACIO[$idx]}" "${ACC_PLATFORM[$idx]}" "$(platform_url "${ACC_PLATFORM[$idx]}")"
-      cat "$HOME/.ssh/id_ed25519_$slug.pub" 2>/dev/null
-    done
-  } > "$claves_tmp"
-  dotfiles_backup "$HOME/claves-ssh.txt" || true
-  dotfiles_atomic_write "$HOME/claves-ssh.txt" 600 < "$claves_tmp"
-  rm -f "$claves_tmp"
-  if [ -f "$HOME/claves-ssh.txt" ]; then
-    say "Sin portapapeles: todas las claves guardadas en ~/claves-ssh.txt"
-  fi
 fi
-if [ "$copied" = "1" ] && [ "${#ACC_SLUG[@]}" -gt 0 ]; then
-  say "Las claves de los espacios se copian solas si su prueba SSH falla (paso 'Probar llaves SSH')."
+if [ "${#ACC_SLUG[@]}" -gt 0 ]; then
+  say "Las claves de los espacios se copian en el paso 'Probar llaves SSH' (y estan en ~/claves-ssh.txt)."
 fi
 
 # --- comprobacion SSH (solo standalone) ---------------------------------------

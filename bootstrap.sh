@@ -367,9 +367,11 @@ test_account() {
     echo "##log $title sin clave ($keyfile); omitido"
     return 0
   fi
-  if ! ssh_test "$title" "$target"; then
-    show_key "$keyfile" "$(platform_url "$platform")"
-  fi
+  ssh_test "$title" "$target" || true
+  # Copiar la publica siempre: que la prueba SSH salga bien o mal no debe
+  # decidir que claves puede copiar el usuario (antes solo se copiaba la
+  # personal y las demas dependian de que la prueba fallara).
+  show_key "$keyfile" "$(platform_url "$platform")"
 }
 
 case "$PERSONAL_PLATFORM" in
