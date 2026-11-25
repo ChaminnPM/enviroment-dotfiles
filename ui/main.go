@@ -11,7 +11,7 @@ import (
 	"os"
 )
 
-var nuiVersion = "0.2.8"
+var nuiVersion = "0.2.9"
 
 func main() {
 	args := stripNoColor(os.Args[1:])

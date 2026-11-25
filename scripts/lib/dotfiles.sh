@@ -224,6 +224,83 @@ dotfiles_env_load() {
   . "$f"
 }
 
+# dotfiles_env_install_bashrc: hace que ~/.bashrc cargue el env file con los
+# PATH persistidos. Sin esto, los binarios instalados en ~/.local/bin,
+# ~/.herdr/bin o ~/.opencode/bin no se encuentran en una terminal nueva.
+dotfiles_env_install_bashrc() {
+  local rc="$HOME/.bashrc" header='# >>> dotfiles-env (no editar)'
+  local footer='# <<< dotfiles-env' f tmp
+  f="$(dotfiles_env_file)"
+  [ -n "$f" ] || return 1
+  [ -e "$rc" ] || { : > "$rc"; chmod 644 "$rc" 2>/dev/null || true; }
+  dotfiles_backup "$rc" || true
+  tmp="$(mktemp)" || return 1
+  printf '[ -f %q ] && . %q\n' "$f" "$f" > "$tmp"
+  if dotfiles_managed_block "$rc" "$header" "$footer" append \
+      "$(dotfiles_file_mode "$rc")" < "$tmp"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# dotfiles_sudo_run <timeout> <cmd...>
+# Reutiliza la contraseña capturada una vez por el paso interactivo de sudo.
+# Los pasos del panel no tienen TTY y cada uno es un bash -c distinto, por lo
+# que el timestamp de sudo (por defecto tipo tty/ppid) no se comparte: hay que
+# autenticar con -S desde el archivo temporal protegido de NUI_STATE_DIR.
+dotfiles_sudo_run() {
+  local to="$1" passfile="${NUI_STATE_DIR:-}/sudo-pass" pass="" rc=0
+  local -a pre=()
+  shift
+  if [ -n "$to" ] && command -v timeout >/dev/null 2>&1; then pre=(timeout "$to"); fi
+  if sudo -n true 2>/dev/null; then
+    "${pre[@]}" sudo -n "$@"
+    return $?
+  fi
+  if [ -s "$passfile" ]; then
+    pass="$(cat "$passfile" 2>/dev/null)" || return 1
+    printf '%s\n' "$pass" | "${pre[@]}" sudo -S -p '' "$@"
+    rc=${PIPESTATUS[1]}
+    return "$rc"
+  fi
+  return 1
+}
+
+# dotfiles_user_bin <binario> <url> [ruta-interna]
+# Instala un binario user-space en ~/.local/bin cuando no hay sudo disponible.
+dotfiles_user_bin() {
+  local bin="$1" url="$2" inner="${3:-}" tmp arc src="" dest
+  [ -n "$bin" ] && [ -n "$url" ] || return 1
+  dest="$HOME/.local/bin/$bin"
+  command -v "$bin" >/dev/null 2>&1 && return 0
+  if [ -x "$dest" ]; then
+    dotfiles_env_path_add "$HOME/.local/bin"
+    return 0
+  fi
+  case "$(uname -m)" in x86_64|amd64) ;; *) return 1 ;; esac
+  tmp="$(mktemp -d)" || return 1
+  arc="$tmp/pkg.tgz"
+  if ! curl -fsSL --retry 3 --max-time 180 "$url" -o "$arc"; then
+    rm -rf "$tmp"; return 1
+  fi
+  if ! tar -xzf "$arc" -C "$tmp"; then
+    rm -rf "$tmp"; return 1
+  fi
+  [ -n "$inner" ] && [ -f "$tmp/$inner" ] && src="$tmp/$inner"
+  [ -n "$src" ] || src="$(find "$tmp" -type f -name "$bin" -print -quit 2>/dev/null)"
+  if [ -z "$src" ] || [ ! -f "$src" ]; then
+    rm -rf "$tmp"; return 1
+  fi
+  mkdir -p "$HOME/.local/bin" || { rm -rf "$tmp"; return 1; }
+  cp "$src" "$dest" 2>/dev/null || { rm -rf "$tmp"; return 1; }
+  chmod 755 "$dest" 2>/dev/null || true
+  rm -rf "$tmp"
+  dotfiles_env_path_add "$HOME/.local/bin"
+  return 0
+}
+
 # dotfiles_git_set <archivo> <clave> <valor>
 # Escribe con `git config --file` (sin interpolar en un printf ni en bash -c).
 dotfiles_git_set() {

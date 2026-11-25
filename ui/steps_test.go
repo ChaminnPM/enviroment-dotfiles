@@ -475,3 +475,58 @@ func TestStepNavigationAfterFinish(t *testing.T) {
 		t.Fatal("tab debe volver al reporte")
 	}
 }
+
+func TestConfirmDirectiveWritesAnswer(t *testing.T) {
+	p := plan{Title: "T", Steps: []planStep{{Title: "A", Cmd: "true"}}}
+	dir := t.TempDir()
+	m := newStepsModel(p, dir)
+	m.stateDir = dir
+	m.current = 0
+
+	line := "##confirm key-1 Llave 1/2 registrada. Comprobar ahora?"
+	kind, rest := directive(line)
+	if kind != "confirm" || !strings.HasPrefix(rest, "key-1 ") {
+		t.Fatalf("directive = %q, %q", kind, rest)
+	}
+	out, _ := m.applyLine(lineMsg{idx: 0, line: line})
+	m = out.(stepsModel)
+	if m.pendingConfirm == nil || m.pendingConfirm.id != "key-1" {
+		t.Fatalf("pendingConfirm no registrado: %+v", m.pendingConfirm)
+	}
+	if !strings.Contains(m.pendingConfirm.question, "Comprobar ahora") {
+		t.Fatalf("pregunta = %q", m.pendingConfirm.question)
+	}
+
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.pendingConfirm != nil {
+		t.Fatal("la confirmacion debe cerrarse al responder")
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "confirm-key-1.env"))
+	if err != nil {
+		t.Fatalf("no se escribio la respuesta: %v", err)
+	}
+	if strings.TrimSpace(string(raw)) != "NUI_CONFIRM_ANSWER=true" {
+		t.Fatalf("respuesta = %q", raw)
+	}
+
+	// Segunda pregunta: responder "n" debe escribir false.
+	out, _ = m.applyLine(lineMsg{idx: 0, line: "##confirm key-2 Llave 2/2 registrada. Comprobar ahora?"})
+	m = out.(stepsModel)
+	m = pressModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	raw, err = os.ReadFile(filepath.Join(dir, "confirm-key-2.env"))
+	if err != nil {
+		t.Fatalf("no se escribio la segunda respuesta: %v", err)
+	}
+	if strings.TrimSpace(string(raw)) != "NUI_CONFIRM_ANSWER=false" {
+		t.Fatalf("respuesta = %q", raw)
+	}
+}
+
+func TestSafeConfirmID(t *testing.T) {
+	if got := safeConfirmID("../etc/passwd"); strings.Contains(got, "/") || got == "" {
+		t.Fatalf("safeConfirmID no sanitizo: %q", got)
+	}
+	if got := safeConfirmID(""); got != "key" {
+		t.Fatalf("id vacio = %q, quiere key", got)
+	}
+}

@@ -55,6 +55,9 @@ if [ "${NUI_DRY_RUN:-0}" != "1" ]; then
   dotfiles_env_load 2>/dev/null || true
   dotfiles_backup "$HOME/.bashrc" || true
   dotfiles_backup "$HOME/.bash_profile" || true
+  # El env file se genera en ~/.config/enviroment-dotfiles/env.sh; sin esta
+  # linea ~/.bashrc nunca lo carga y una terminal nueva no ve los binarios.
+  dotfiles_env_install_bashrc 2>/dev/null || true
 fi
 
 APT_PREFIX="$(ui_apt_prefix)"
@@ -104,39 +107,65 @@ export APT_PKGS_STR
 # --- plan de pasos -------------------------------------------------------
 ui_panel_begin
 ui_panel_note "Comandos: sync-dotfiles pull/push"
-ui_panel_note "Carga el PATH en la terminal actual con: . ~/.config/enviroment-dotfiles/env.sh  (o abre una terminal nueva; no uses exec \$SHELL: reemplaza la shell y puede cerrar la terminal)"
+ui_panel_note "PATH persistido automaticamente en ~/.bashrc; abre una terminal nueva para cargarlo (no uses exec \$SHELL: reemplaza la shell y puede cerrar la terminal)"
 
 ui_panel_step "Credenciales sudo" --optional --interactive --estimate 15 <<'EOF'
+passfile="${NUI_STATE_DIR:-}/sudo-pass"
+rm -f "$passfile" 2>/dev/null || true
 if [ -z "${APT_PREFIX:-}" ]; then
-  echo "##log Sin sudo; apt se ejecutara como usuario actual"
+  echo "Sin sudo; apt se ejecutara como usuario actual"
   exit 0
 fi
 if [ -z "${APT_PKGS_STR:-}" ]; then
-  echo "##log No hay paquetes pendientes"
+  echo "No hay paquetes pendientes"
   exit 0
 fi
 if sudo -n true 2>/dev/null; then
-  echo "##log Credenciales sudo OK"
+  echo "Credenciales sudo OK"
   exit 0
 fi
-echo "##log Se solicitara la contrasena de sudo (solo para apt)"
-if sudo -v; then
-  echo "##log Credenciales sudo guardadas"
-else
-  echo "##warn No se pudieron guardar las credenciales sudo"
+echo "Se solicitara la contrasena de sudo (solo para apt)"
+pass=""
+if [ -r /dev/tty ]; then
+  IFS= read -rs -p "Contrasena sudo: " pass < /dev/tty || true
+  printf '\n' > /dev/tty 2>/dev/null || true
+fi
+if [ -z "$pass" ]; then
+  echo "[WARN] No se capturo la contrasena; los pasos apt usaran fallback user-space"
   exit 1
 fi
+# El timestamp de sudo es por TTY/PPID; los pasos del panel son bash -c hijos
+# sin TTY, asi que guardamos la contrasena en el estado efimero (0700/0600)
+# para reautenticar con sudo -S en cada paso que lo necesite.
+if printf '%s\n' "$pass" | sudo -S -p '' -v >/dev/null 2>&1; then
+  if [ -n "${NUI_STATE_DIR:-}" ] && [ -d "$NUI_STATE_DIR" ]; then
+    umask 077
+    printf '%s\n' "$pass" > "$passfile"
+    chmod 600 "$passfile" 2>/dev/null || true
+    echo "Credenciales sudo guardadas temporalmente"
+  else
+    echo "[WARN] No hay directorio de estado seguro para la contrasena"
+    exit 1
+  fi
+else
+  echo "[WARN] Contrasena de sudo incorrecta o sudo no disponible"
+  exit 1
+fi
+unset pass
 EOF
 
 ui_panel_step "Dependencias base" --estimate 45 <<'EOF'
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
+passfile="${NUI_STATE_DIR:-}/sudo-pass"
 sudo_ok=1
 if [ -n "${APT_PREFIX:-}" ]; then
-  if sudo -n true 2>/dev/null; then
+  if sudo -n true 2>/dev/null || [ -s "$passfile" ]; then
     sudo_ok=1
   else
     sudo_ok=0
     echo "##warn Contraseña sudo no activa; el gestor de paquetes no instalara nada"
-    echo "##log Completa el paso 'Credenciales sudo' (relanzando la instalación)"
+    echo "##log Ejecuta 'sudo -v' en tu terminal y relanza el instalador"
   fi
 fi
 
@@ -155,7 +184,7 @@ pkg_run() {
   rc=0
   export DEBIAN_FRONTEND=noninteractive
   if [ -n "${APT_PREFIX:-}" ]; then
-    timeout "$to" sudo -n "$@" >"$log" 2>&1 || rc=$?
+    dotfiles_sudo_run "$to" "$@" >"$log" 2>&1 || rc=$?
   else
     timeout "$to" "$@" >"$log" 2>&1 || rc=$?
   fi
@@ -272,7 +301,7 @@ INPUTS
 bash "$REPO_DIR/scripts/setup-git-identity.sh"
 EOF
 
-  ui_panel_step "Registrar y probar llaves SSH" --optional --interactive --estimate 40 <<'EOF'
+  ui_panel_step "Registrar y probar llaves SSH" --optional --estimate 40 <<'EOF'
 
 # ui_copy_clip / ui_open_url son funciones de ui.sh y no se heredan entre
 # procesos: cargarlas aqui (antes este paso las llamaba sin tenerlas).
@@ -303,6 +332,10 @@ show_key() {
     echo "##log Llave $title copiada al portapapeles"
   else
     echo "##warn No hay portapapeles disponible; copia la linea publica mostrada arriba"
+    printf '=== %s (pegar en %s)\n' "$title" "$url" >> "$HOME/claves-ssh.txt" 2>/dev/null || true
+    cat "$file" >> "$HOME/claves-ssh.txt" 2>/dev/null || true
+    chmod 600 "$HOME/claves-ssh.txt" 2>/dev/null || true
+    echo "##log Respaldo: ~/claves-ssh.txt"
   fi
   if ui_open_url "$url" 2>/dev/null; then
     echo "##log Plataforma abierta: $url"
@@ -340,7 +373,7 @@ test_account() {
   echo "##progress $((order * 100 / ACCOUNT_COUNT))"
   show_key "$title" "$keyfile" "$(platform_url "$platform")"
 
-  if ui_ask "Llave $order/$ACCOUNT_COUNT registrada y guardada en $title. Comprobar ahora?"; then
+  if ui_panel_confirm "key-$order" "Llave $order/$ACCOUNT_COUNT registrada y guardada en $title. Comprobar ahora?"; then
     ssh_test "$title" "$target" || true
   else
     echo "##log Comprobacion de $title omitida; puedes volver a ejecutar este paso"
@@ -390,6 +423,7 @@ option extras zoxide
 option extras fd-find
 option extras lazygit
 option extras neovim
+default extras neovim
 INPUTS
 ui_panel_step "Paquetes custom" --estimate 90 <<'EOF'
 # shellcheck source=lib/dotfiles.sh
@@ -428,7 +462,7 @@ apt_one() {
     *) return 1 ;;
   esac
   if [ -n "${APT_PREFIX:-}" ]; then
-    timeout "$to" sudo -n "${cmd[@]}" >"$log" 2>&1 || rc=$?
+    dotfiles_sudo_run "$to" "${cmd[@]}" >"$log" 2>&1 || rc=$?
   else
     timeout "$to" "${cmd[@]}" >"$log" 2>&1 || rc=$?
   fi
@@ -451,6 +485,31 @@ for p in ${SELECTED}; do
   esac
 done
 
+# URLs pinnadas para el fallback sin sudo (se pueden sobreescribir por env).
+FZF_URL="${FZF_URL:-https://github.com/junegunn/fzf/releases/download/v0.65.0/fzf-0.65.0-linux_amd64.tar.gz}"
+RIPGREP_URL="${RIPGREP_URL:-https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz}"
+RIPGREP_INNER="${RIPGREP_INNER:-ripgrep-14.1.1-x86_64-unknown-linux-musl/rg}"
+BAT_URL="${BAT_URL:-https://github.com/sharkdp/bat/releases/download/v0.25.0/bat-v0.25.0-x86_64-unknown-linux-musl.tar.gz}"
+BAT_INNER="${BAT_INNER:-bat-v0.25.0-x86_64-unknown-linux-musl/bat}"
+EZA_URL="${EZA_URL:-https://github.com/eza-community/eza/releases/download/v0.23.0/eza_x86_64-unknown-linux-gnu.tar.gz}"
+ZOXIDE_URL="${ZOXIDE_URL:-https://github.com/ajeetdsouza/zoxide/releases/download/v0.9.8/zoxide-0.9.8-x86_64-unknown-linux-musl.tar.gz}"
+FD_URL="${FD_URL:-https://github.com/sharkdp/fd/releases/download/v10.2.0/fd-v10.2.0-x86_64-unknown-linux-musl.tar.gz}"
+FD_INNER="${FD_INNER:-fd-v10.2.0-x86_64-unknown-linux-musl/fd}"
+LAZYGIT_URL="${LAZYGIT_URL:-https://github.com/jesseduffield/lazygit/releases/download/v0.55.0/lazygit_0.55.0_Linux_x86_64.tar.gz}"
+
+user_fallback() {
+  case "$1" in
+    fzf) dotfiles_user_bin fzf "$FZF_URL" ;;
+    ripgrep) dotfiles_user_bin rg "$RIPGREP_URL" "$RIPGREP_INNER" ;;
+    bat) dotfiles_user_bin bat "$BAT_URL" "$BAT_INNER" ;;
+    eza) dotfiles_user_bin eza "$EZA_URL" ;;
+    zoxide) dotfiles_user_bin zoxide "$ZOXIDE_URL" ;;
+    fd-find) dotfiles_user_bin fd "$FD_URL" "$FD_INNER" ;;
+    lazygit) dotfiles_user_bin lazygit "$LAZYGIT_URL" ;;
+    *) return 1 ;;
+  esac
+}
+
 if [ ${#CUSTOM_APT[@]} -gt 0 ]; then
   if [ -z "${PKG_MGR:-}" ]; then
     for _m in apt-get dnf pacman zypper apk; do
@@ -459,9 +518,20 @@ if [ ${#CUSTOM_APT[@]} -gt 0 ]; then
   fi
   if [ -z "${PKG_MGR:-}" ]; then
     echo "##warn Instala manualmente: ${CUSTOM_APT[*]}"
-  elif [ -n "${APT_PREFIX:-}" ] && ! sudo -n true 2>/dev/null; then
-    echo "##warn Contraseña sudo no activa; no puedo instalar: ${CUSTOM_APT[*]}"
-    echo "##log Relanza la instalación y completa el paso 'Credenciales sudo'"
+  elif [ -n "${APT_PREFIX:-}" ] && ! sudo -n true 2>/dev/null && [ ! -s "${NUI_STATE_DIR:-}/sudo-pass" ]; then
+    echo "##warn Contraseña sudo no activa; intentando instalacion user-space"
+    missed=()
+    for pkg in "${CUSTOM_APT[@]}"; do
+      if user_fallback "$pkg"; then
+        echo "##log $pkg instalado en ~/.local/bin"
+      else
+        missed+=("$pkg")
+      fi
+    done
+    if [ ${#missed[@]} -gt 0 ]; then
+      echo "##warn No se pudieron instalar en user-space: ${missed[*]}"
+      echo "##log Instalalos con: sudo apt install ${missed[*]}"
+    fi
   else
     total=${#CUSTOM_APT[@]}
     i=0
@@ -686,7 +756,11 @@ for p in "$HOME/.opencode/bin" "$HOME/.local/bin" "$HOME/bin"; do
   fi
 done
 export PATH
-echo "OpenCode $(opencode --version 2>/dev/null || echo '?')"
+if command -v opencode >/dev/null 2>&1; then
+  echo "OpenCode $(opencode --version 2>/dev/null || echo '?')"
+else
+  echo "##warn OpenCode no encontrado; revisa ~/.opencode/bin y el PATH persistido"
+fi
 EOF
 
 ui_panel_step "Restaurar configuración" --estimate 60 <<'EOF'
@@ -700,8 +774,16 @@ else
 fi
 if [ -f "$OPENCODE_DIR/package.json" ] && command -v npm >/dev/null 2>&1; then
   echo "##log Instalando dependencias npm"
-  if ! (cd "$OPENCODE_DIR" && npm install >/dev/null 2>&1); then
-    echo "##warn npm install falló; revisa node_modules manualmente"
+  npm_log="$LOG_DIR/npm-install-$(date +%Y%m%d-%H%M%S)-$$.log"
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  if ! (cd "$OPENCODE_DIR" && npm install --no-audit --no-fund >"$npm_log" 2>&1); then
+    echo "##log Reintentando npm install (prefer-online)"
+    if (cd "$OPENCODE_DIR" && npm install --no-audit --no-fund --prefer-online >>"$npm_log" 2>&1); then
+      echo "##log npm install exitoso tras el reintento"
+    else
+      echo "##warn npm install falló; revisa $npm_log"
+      tail -n 8 "$npm_log" 2>/dev/null | while IFS= read -r l; do echo "##log $l"; done
+    fi
   fi
 elif [ -f "$OPENCODE_DIR/package.json" ]; then
   echo "##warn npm no disponible; no se instalaron las dependencias de $OPENCODE_DIR"
@@ -793,7 +875,11 @@ for p in "$HOME/.herdr/bin" "$HOME/.local/bin" "$HOME/.opencode/bin"; do
   fi
 done
 export PATH
-echo "herdr atendido"
+if command -v herdr >/dev/null 2>&1; then
+  echo "herdr $(herdr --version 2>/dev/null || echo '?')"
+else
+  echo "##warn herdr no encontrado; revisa ~/.local/bin y el PATH persistido"
+fi
 EOF
 
 ui_panel_step "Wrappers" --estimate 10 <<'EOF'
@@ -849,12 +935,62 @@ chmod 755 "$HOME/.local/bin/sync-dotfiles"
 echo "sync-dotfiles instalado"
 EOF
 
+ui_panel_step "Verificación final" --optional --estimate 20 <<'EOF'
+# shellcheck source=lib/dotfiles.sh
+source "$REPO_DIR/scripts/lib/dotfiles.sh"
+dotfiles_env_load 2>/dev/null || true
+export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.herdr/bin:$PATH"
+failed=0
+check_bin() {
+  local label="$1" bin="$2" p
+  p="$(command -v "$bin" 2>/dev/null || true)"
+  if [ -n "$p" ] && [ -x "$p" ]; then
+    echo "##log $label OK ($p)"
+  else
+    echo "##warn $label no encontrado en PATH"
+    failed=1
+  fi
+}
+check_bin OpenCode opencode
+check_bin herdr herdr
+check_bin Node node
+check_bin npm npm
+check_bin Neovim nvim
+if command -v nvim >/dev/null 2>&1; then
+  cur="$(nvim --version 2>/dev/null | sed -n 's/^NVIM v\([0-9][0-9.]*\).*/\1/p' | head -1)"
+  got="$(printf '%s' "${cur:-0}" | awk -F. '{print $1*10000+$2*100+$3}')"
+  if [ "${got:-0}" -le 1102 ]; then
+    echo "##warn Neovim ${cur:-?} no supera la version requerida 0.11.2"
+    failed=1
+  fi
+fi
+if [ -x "$HOME/.local/bin/sync-dotfiles" ]; then
+  echo "##log Ejecutando sync-dotfiles doctor"
+  "$HOME/.local/bin/sync-dotfiles" doctor 2>&1 | tail -n 20 || true
+else
+  echo "##warn sync-dotfiles no instalado"
+fi
+if [ "$failed" -ne 0 ]; then
+  echo "##warn Hay herramientas pendientes; revisa los avisos del reporte"
+  exit 1
+fi
+echo "Verificación final OK"
+EOF
+
 ui_panel_step "Persistencia de entorno" --estimate 10 <<'EOF'
 # shellcheck source=lib/dotfiles.sh
 source "$REPO_DIR/scripts/lib/dotfiles.sh"
 bp="$HOME/.bash_profile"
 [ -f "$bp" ] || { : > "$bp"; chmod 644 "$bp" 2>/dev/null || true; }
 dotfiles_backup "$bp" || true
+if dotfiles_env_install_bashrc; then
+  echo "PATH persistido en ~/.bashrc"
+else
+  echo "##warn No se pudo persistir el PATH en ~/.bashrc"
+fi
+# La contrasena de sudo solo vive en el estado efimero del TUI; se borra al
+# terminar (defensa en profundidad, ademas del RemoveAll de nui).
+rm -f "${NUI_STATE_DIR:-}/sudo-pass" 2>/dev/null || true
 bp_header='# >>> dotfiles-shell (no editar)'
 bp_footer='# <<< dotfiles-shell'
 bp_tmp="$(mktemp)"

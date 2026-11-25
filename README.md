@@ -19,8 +19,10 @@ curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/
 
 El instalador descarga el repo como **tarball** y no requiere `git` para empezar. Luego `bootstrap.sh` instala dependencias base (`git`, `curl`, `python3`, `tar`, `gzip`, `rsync`, `openssh-client`, etc.) antes de los pasos que las necesitan.
 
-La forma correcta de cargar el PATH y NVM al terminar es abrir una terminal
-nueva, o sourcear el archivo de entorno en la actual:
+El PATH de las herramientas instaladas (nvm, opencode, herdr, nvim,
+`~/.local/bin`) se persiste automáticamente: el instalador agrega a `~/.bashrc`
+un bloque gestionado que carga `~/.config/enviroment-dotfiles/env.sh`. Abre una
+terminal nueva para usarlo; también puedes cargarlo en la actual:
 
 ```bash
 . "$HOME/.config/enviroment-dotfiles/env.sh"
@@ -66,8 +68,9 @@ deja fuera de la sesión.
      - `zoxide`
      - `fd-find`
    - Instala Node/nvm, OpenCode, configuracion publica, `graphify`, `oh-my-bash` y `herdr`.
+   - `neovim` viene seleccionado por defecto (descarga pinnada a `~/.local/nvim` si no hay version > 0.11.2).
    - Aplica Alacritty y, al final, el **tema** a todas las herramientas presentes.
-   - Instala el wrapper publico `sync-dotfiles`.
+   - Instala el wrapper publico `sync-dotfiles` y ejecuta una **verificación final** (`opencode`, `herdr`, `node`, `npm`, `nvim` y `sync-dotfiles doctor`).
 5. Elimina el directorio temporal del repo: no queda `~/enviroment-dotfiles` instalado localmente.
 
 ### Opciones del instalador
@@ -105,7 +108,12 @@ puede cargarse sin reemplazar la shell:
 ```
 
 **Aviso `Contraseña sudo no activa; el gestor de paquetes no instalara nada`.**
-Activa las credenciales y vuelve a ejecutar el paso:
+El paso interactivo "Credenciales sudo" pide la contraseña una sola vez y la
+reutiliza en los pasos apt con `sudo -S` (el timestamp de sudo es por
+TTY/PPID y no se comparte entre los `bash -c` del panel). La contraseña se
+guarda solo en el directorio de estado temporal (`0700/0600`) y se borra al
+terminar. Si se omite el paso, los paquetes custom se instalan en
+`~/.local/bin` desde binarios pinnados de GitHub; si aun asi falta algo:
 
 ```bash
 sudo -v && sudo -n true
@@ -134,8 +142,9 @@ bash install.sh --only "OpenCode"
 bash install.sh --only "herdr"
 ```
 
-**Aviso `npm install falló; revisa node_modules manualmente`.** El paso guarda la
-salida de npm en los logs; para reproducirla de forma visible:
+**Aviso `npm install falló; revisa <log>`.** El paso reintenta con
+`--prefer-online` y guarda la salida en `logs/npm-install-*.log`; para
+reproducirla de forma visible:
 
 ```bash
 command -v node && node --version
@@ -160,8 +169,10 @@ bash install.sh --only "Restaurar configuración"
   bloque esta incompleto, el script **no** toca el archivo y avisa.
 - Los permisos sensibles se fijan: claves SSH y perfiles git `0600`,
   `~/.ssh/config` `0600`, logs en `0700`/`0600`.
-- `PATH` de herramientas instaladas (nvm, opencode, herdr) se persiste en
-  `~/.config/enviroment-dotfiles/env.sh`, que cada paso carga antes de ejecutar.
+- `PATH` de herramientas instaladas (nvm, opencode, herdr, nvim, `~/.local/bin`)
+  se persiste en `~/.config/enviroment-dotfiles/env.sh`, que cada paso carga
+  antes de ejecutar y que `~/.bashrc` sourcea automáticamente mediante un bloque
+  gestionado.
 
 ## Contenido publico
 - `config/opencode/`: configuración global de OpenCode, sin credenciales ni contenido privado.
@@ -288,15 +299,15 @@ bash scripts/sync.sh push
 - En los formularios, `shift+tab` (o `↑`, y `←` en selecciones) vuelve al campo anterior conservando lo escrito; cambiar un campo anterior recalcula los campos condicionales.
 - La lista de pasos se puede recorrer con `↑/↓` en cualquier momento, incluso mientras uno se ejecuta o despues de terminar: el detalle sigue al cursor y `enter` fija/selta un paso (`◆`). Con un formulario abierto, `tab` lleva el foco a la lista de pasos (el panel derecho muestra el detalle del paso señalado) y `tab`/`esc` vuelve al formulario sin perder lo escrito; `ctrl+↑/↓` navega los pasos directamente. Al terminar, `tab` alterna entre el reporte final y la lista de pasos.
 - Los pasos opcionales (credenciales sudo, identidad Git, .NET) se pueden **omitir** con `esc` sin detener la instalacion; los prompts y selecciones se resuelven antes del panel solo cuando no hay TTY.
-- El paso **Registrar y probar llaves SSH** es interactivo y recorre las cuentas en orden:
-  1. copia cada clave pública al portapapeles;
+- El paso **Registrar y probar llaves SSH** recorre las cuentas en orden **dentro del panel** (sin ceder la terminal ni lanzar un segundo TUI):
+  1. muestra la clave pública de la cuenta y la copia al portapapeles; si no hay portapapeles, la respalda en `~/claves-ssh.txt` y la muestra para copiarla manualmente;
   2. abre la página de claves SSH de GitHub o Bitbucket;
-  3. pide confirmar que la llave fue registrada;
-  4. ejecuta `ssh -T` para esa cuenta;
+  3. el panel pregunta `Sí/No` con `##confirm` (`←/→` para elegir, `enter` para confirmar, `esc` = no);
+  4. si se confirma, ejecuta `ssh -T` para esa cuenta;
   5. continúa con la siguiente llave solo después de procesar la actual.
-  La lista, la llave activa y el resultado permanecen visibles en el panel. Las claves también quedan respaldadas en `~/claves-ssh.txt`. Si no hay portapapeles, se muestra la clave pública para copiarla manualmente.
-- Si el sistema necesita `apt`, el paso **Credenciales sudo** pide la contraseña en un TTY real para cachearla; si se omite, los pasos con apt se muestran como avisos con la salida de apt.
-- Cada paso emite `##progress N`, `##log T` y `##warn T` para el panel; la salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH se guarda en logs.
+  La lista, la llave activa, la pregunta y el resultado permanecen visibles en el panel.
+- Si el sistema necesita `apt`, el paso **Credenciales sudo** pide la contraseña en un TTY real (es el único paso que cede la terminal) y la reutiliza en los pasos apt con `sudo -S`; se guarda solo en el estado efímero del TUI y se borra al terminar. Si se omite, los paquetes custom se instalan en `~/.local/bin` desde binarios pinnados y los que falten se informan con el comando exacto para instalarlos.
+- Cada paso emite `##progress N`, `##log T` y `##warn T` para el panel, y puede pedir confirmación en vivo con `##confirm <id> <pregunta>` (la respuesta se escribe en `$NUI_STATE_DIR`). La salida de `apt-get`, `npm`, `git clone`, OpenCode, herdr y SSH se guarda en logs.
 - Al terminar, el **reporte final** (`INSTALADO` / `AVISOS` / `ERRORES`) se muestra como estado final dentro del panel; `q` sale (exit 1 si hay errores). `q`/`esc`/`ctrl+c` durante la ejecucion cancelan (exit 1).
 - Las cajas se ajustan al ancho de la terminal y el panel se adapta al tamano de la ventana.
 - SSH usa host keys pinadas en `config/ssh/known_hosts` con `StrictHostKeyChecking=yes` y `BatchMode=yes`; nunca `ssh-keyscan` ni `accept-new`.

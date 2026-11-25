@@ -249,6 +249,15 @@ type (
 	ctxDoneMsg   struct{}
 )
 
+// confirmRequest es una pregunta enviada por un paso en ejecucion mediante
+// "##confirm <id> <pregunta>". El panel la muestra y escribe la respuesta en
+// $NUI_STATE_DIR/confirm-<id>.env para que el paso pueda continuar.
+type confirmRequest struct {
+	id       string
+	question string
+	idx      int
+}
+
 // ---------------------------------------------------------------- runner
 
 // runner comparte el proceso hijo con el modelo para poder cancelarlo.
@@ -362,6 +371,9 @@ type stepsModel struct {
 	input      textinput.Model
 	confirmYes bool
 
+	// confirmacion en vivo solicitada por un paso (##confirm)
+	pendingConfirm *confirmRequest
+
 	reportScroll int
 }
 
@@ -437,6 +449,11 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyMsg:
+		// Una confirmacion en vivo tiene prioridad sobre el resto de teclas:
+		// el paso esta esperando la respuesta antes de continuar.
+		if m.pendingConfirm != nil && !m.formActive && !m.finished {
+			return m.handleConfirmKey(msg)
+		}
 		// ctrl+↑/↓ navega los pasos incluso desde el formulario.
 		if m.formActive {
 			switch msg.String() {
@@ -495,6 +512,7 @@ func (m stepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *stepsModel) markCanceled() {
+	m.pendingConfirm = nil
 	if m.current >= 0 && m.current < len(m.steps) && m.steps[m.current].state == stRunning {
 		m.steps[m.current].state = stFailed
 		m.steps[m.current].note = "cancelado por el usuario"
@@ -569,6 +587,61 @@ func (m stepsModel) handleReportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.reportScroll = 0
 	case "pgdown", "end":
 		m.reportScroll += 20
+	}
+	return m, nil
+}
+
+// ------------------------------------------------------------ confirmacion en vivo
+
+// safeConfirmID sanitiza el id para usarlo como nombre de archivo: solo se
+// permiten caracteres seguros, sin separadores de ruta.
+func safeConfirmID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "key"
+	}
+	return b.String()
+}
+
+// answerConfirm escribe la respuesta en el estado compartido y cierra la
+// pregunta. La escritura es pequena y ocurre en el event loop (como writeResults).
+func (m *stepsModel) answerConfirm(yes bool) {
+	req := m.pendingConfirm
+	if req == nil {
+		return
+	}
+	if m.stateDir != "" {
+		path := filepath.Join(m.stateDir, "confirm-"+safeConfirmID(req.id)+".env")
+		value := "false"
+		if yes {
+			value = "true"
+		}
+		_ = os.MkdirAll(m.stateDir, 0o700)
+		_ = os.WriteFile(path, []byte("NUI_CONFIRM_ANSWER="+value+"\n"), 0o600)
+	}
+	m.pendingConfirm = nil
+}
+
+func (m stepsModel) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// ctrl+c conserva su significado global: cancela toda la instalacion.
+	if msg.String() == "ctrl+c" {
+		return m.handleKey(msg)
+	}
+	switch msg.String() {
+	case "left", "right", "h", "l", "tab", "shift+tab":
+		m.confirmYes = !m.confirmYes
+	case "y", "Y", "s", "S":
+		m.answerConfirm(true)
+	case "n", "N", "esc":
+		m.answerConfirm(false)
+	case "enter":
+		m.answerConfirm(m.confirmYes)
 	}
 	return m, nil
 }
@@ -928,6 +1001,7 @@ func (m stepsModel) begin(idx int) (tea.Model, tea.Cmd) {
 	st.started = time.Now()
 	m.current = idx
 	m.cursor = idx
+	m.pendingConfirm = nil
 
 	ps := m.plan.Steps[idx]
 	if len(ps.Inputs) > 0 {
@@ -1035,6 +1109,21 @@ func (m stepsModel) applyLine(msg lineMsg) (tea.Model, tea.Cmd) {
 		st.note = strings.TrimSpace(rest)
 		st.logs = appendLog(st.logs, st.note)
 		return m, nil
+	case "confirm":
+		// Formato: "##confirm <id> <pregunta>". El id identifica el archivo
+		// de respuesta; la pregunta se muestra en el panel sin TUI anidado.
+		id, question := "key", strings.TrimSpace(rest)
+		if parts := strings.SplitN(question, " ", 2); len(parts) == 2 && strings.TrimSpace(parts[0]) != "" {
+			id = strings.TrimSpace(parts[0])
+			question = strings.TrimSpace(parts[1])
+		}
+		if question == "" {
+			question = "Continuar?"
+		}
+		m.pendingConfirm = &confirmRequest{id: id, question: question, idx: msg.idx}
+		m.confirmYes = true
+		st.logs = appendLog(st.logs, "❓ "+question)
+		return m, nil
 	}
 
 	clean := cleanLine(msg.line)
@@ -1051,6 +1140,7 @@ func (m stepsModel) finishStep(msg stepDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	st := &m.steps[msg.idx]
 	st.percent = 1
+	m.pendingConfirm = nil
 
 	switch {
 	case msg.err != nil:
@@ -1201,6 +1291,8 @@ func (m stepsModel) View() string {
 	switch {
 	case m.formActive && !m.focusSteps:
 		right = m.viewForm(rightW, bodyH)
+	case m.pendingConfirm != nil && !m.finished:
+		right = m.viewConfirm(rightW, bodyH)
 	case m.finished && !m.showSteps:
 		right = m.viewReport(rightW, bodyH)
 	default:
@@ -1380,6 +1472,33 @@ func (m stepsModel) viewPanel(w, h int) string {
 }
 
 // ------------------------------------------------------------ formulario
+
+// viewConfirm muestra la pregunta que un paso en ejecucion hizo a traves de
+// "##confirm". Se dibuja dentro del panel: no se cede la terminal ni se lanza
+// un segundo programa bubbletea.
+func (m stepsModel) viewConfirm(w, h int) string {
+	req := m.pendingConfirm
+	if req == nil {
+		return ""
+	}
+	innerW := maxInt(0, w-4)
+	yes, no := stPendMark.Render("[ ] sí"), stPendMark.Render("[ ] no")
+	if m.confirmYes {
+		yes = stDoneMark.Render("[x] sí")
+	} else {
+		no = stDoneMark.Render("[x] no")
+	}
+	lines := []string{
+		stHeader.Render(truncate("Confirmación", innerW)),
+		"",
+		stTitleRun.Render(truncate(req.question, innerW)),
+		"",
+		"  " + yes + "   " + no,
+		"",
+		stFaint.Render(truncate("←/→ elegir · enter confirmar · esc = no", innerW)),
+	}
+	return m.rightPanelBox().Width(w - 2).Height(h - 2).Render(strings.Join(lines, "\n"))
+}
 
 func (m stepsModel) viewForm(w, h int) string {
 	innerW := maxInt(0, w-4)
@@ -1664,6 +1783,11 @@ func (m stepsModel) viewFooter(w int) string {
 		return lipgloss.NewStyle().MaxWidth(w).Render(
 			" " + stFootTxt.Render(truncate(hint, w-1)))
 	}
+	if m.pendingConfirm != nil && !m.finished {
+		hint := "[←/→] elegir · [enter] confirmar · [esc] no · [ctrl+c] cancelar"
+		return lipgloss.NewStyle().MaxWidth(w).Render(
+			" " + stFootTxt.Render(truncate(hint, w-1)))
+	}
 
 	title := m.plan.Title
 	var keys [][2]string
@@ -1917,7 +2041,7 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 		promptInputs(stateDir, i, ps.Inputs, inputReader)
 
 		c := exec.Command("bash", "-c", ps.Cmd)
-		env := append(os.Environ(), "TERM=dumb")
+		env := append(os.Environ(), "TERM=dumb", "NUI_PLAIN=1")
 		if stateDir != "" {
 			env = append(env, "NUI_STATE_DIR="+stateDir,
 				fmt.Sprintf("NUI_STEP_RESULT=%s", filepath.Join(stateDir, fmt.Sprintf("result-%02d.env", i+1))))
@@ -1955,6 +2079,10 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 						fmt.Println("[WARN] " + rest)
 						warned = true
 					case "title", "progress":
+					case "confirm":
+						// En modo texto ui_panel_confirm pregunta por /dev/tty;
+						// aqui solo mostramos la pregunta.
+						fmt.Println("[CONFIRMAR] " + rest)
 					default:
 						if l := cleanLine(line); l != "" {
 							fmt.Println(l)

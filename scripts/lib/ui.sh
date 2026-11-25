@@ -332,6 +332,41 @@ ui_ask() {
   return 1
 }
 
+# ui_panel_confirm <id> <pregunta>: confirmacion dentro del panel de nui.
+# El paso emite "##confirm <id> <pregunta>" y espera a que el TUI escriba la
+# respuesta en $NUI_STATE_DIR/confirm-<id>.env. Asi no se cede la terminal ni
+# se lanza un segundo programa bubbletea sobre el mismo /dev/tty.
+# En modo texto (NUI_PLAIN=1 o sin estado compartido) pregunta por /dev/tty.
+ui_panel_confirm() {
+  local id="$1"; shift
+  local question="$*" safe answer i a=""
+
+  [ "${NUI_NONINTERACTIVE:-0}" = "1" ] && return 1
+  safe="$(printf '%s' "${id:-key}" | tr -cd '[:alnum:]_.-' 2>/dev/null || true)"
+  [ -n "$safe" ] || safe=key
+
+  if [ "${NUI_PLAIN:-0}" = "1" ] || [ -z "${NUI_STATE_DIR:-}" ] || [ ! -d "$NUI_STATE_DIR" ]; then
+    if [ -t 0 ] || [ -r /dev/tty ]; then
+      _ui_read -rp "$question [s/N]: " a || true
+    fi
+    case "${a,,}" in s*|y*) return 0 ;; *) return 1 ;; esac
+  fi
+
+  answer="$NUI_STATE_DIR/confirm-$safe.env"
+  rm -f "$answer" 2>/dev/null || true
+  printf '##confirm %s %s\n' "$safe" "$question"
+  # Espera como maximo 5 minutos: si el panel se cancela, el paso es matado
+  # por el runner; este limite evita quedar colgado ante un TUI perdido.
+  for ((i = 0; i < 600; i++)); do
+    [ -f "$answer" ] && break
+    sleep 0.5
+  done
+  [ -f "$answer" ] || return 1
+  # shellcheck disable=SC1090
+  . "$answer"
+  [ "${NUI_CONFIRM_ANSWER:-false}" = "true" ]
+}
+
 ui_input() {
   if [ "${NUI_NONINTERACTIVE:-0}" = "1" ]; then
     printf '%s' "${UI_INPUT_DEFAULT:-}"
@@ -1079,13 +1114,13 @@ _ui_panel_run_plain() {
         continue
       fi
       if [ -e /dev/tty ] && [ -r /dev/tty ]; then
-        bash "$path" < /dev/tty
+        NUI_PLAIN=1 bash "$path" < /dev/tty
       else
-        bash "$path" </dev/null
+        NUI_PLAIN=1 bash "$path" </dev/null
       fi
       rc=$?
     else
-      bash "$path" </dev/null 2>&1 | _ui_panel_filter "$log"
+      NUI_PLAIN=1 bash "$path" </dev/null 2>&1 | _ui_panel_filter "$log"
       rc=${PIPESTATUS[0]}
     fi
 
