@@ -245,6 +245,55 @@ dotfiles_env_install_bashrc() {
   return 1
 }
 
+# dotfiles_shell_startup_install: garantiza que una shell NUEVA cargue el
+# entorno sin tener que ejecutar `exec $SHELL`. Cubre:
+#   - ~/.profile  -> ~/.bashrc (bash) y el env file (cualquier shell)
+#   - ~/.zshrc    -> env file + nvm (si zsh esta instalado)
+# ~/.bash_profile ya lo hace el paso de persistencia.
+dotfiles_shell_startup_install() {
+  local envfile header footer tmp profile
+  envfile="$(dotfiles_env_file)"
+  [ -n "$envfile" ] || return 1
+
+  profile="$HOME/.profile"
+  [ -e "$profile" ] || { : > "$profile"; chmod 644 "$profile" 2>/dev/null || true; }
+  dotfiles_backup "$profile" || true
+  header='# >>> dotfiles-profile (no editar)'
+  footer='# <<< dotfiles-profile'
+  tmp="$(mktemp)" || return 1
+  {
+    printf '%s\n' '[ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"'
+    printf '[ -f %q ] && . %q\n' "$envfile" "$envfile"
+  } > "$tmp"
+  if ! dotfiles_managed_block "$profile" "$header" "$footer" append \
+      "$(dotfiles_file_mode "$profile")" < "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  rm -f "$tmp"
+
+  if command -v zsh >/dev/null 2>&1 || [ -f "$HOME/.zshrc" ]; then
+    profile="$HOME/.zshrc"
+    [ -e "$profile" ] || { : > "$profile"; chmod 644 "$profile" 2>/dev/null || true; }
+    dotfiles_backup "$profile" || true
+    header='# >>> dotfiles-zsh (no editar)'
+    footer='# <<< dotfiles-zsh'
+    tmp="$(mktemp)" || return 1
+    {
+      printf '[ -f %q ] && . %q\n' "$envfile" "$envfile"
+      printf '%s\n' 'export NVM_DIR="$HOME/.nvm"'
+      printf '%s\n' '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
+    } > "$tmp"
+    if ! dotfiles_managed_block "$profile" "$header" "$footer" append \
+        "$(dotfiles_file_mode "$profile")" < "$tmp"; then
+      rm -f "$tmp"
+      return 1
+    fi
+    rm -f "$tmp"
+  fi
+  return 0
+}
+
 # dotfiles_sudo_run <timeout> <cmd...>
 # Reutiliza la contraseña capturada una vez por el paso interactivo de sudo.
 # Los pasos del panel no tienen TTY y cada uno es un bash -c distinto, por lo

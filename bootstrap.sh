@@ -58,6 +58,7 @@ if [ "${NUI_DRY_RUN:-0}" != "1" ]; then
   # El env file se genera en ~/.config/enviroment-dotfiles/env.sh; sin esta
   # linea ~/.bashrc nunca lo carga y una terminal nueva no ve los binarios.
   dotfiles_env_install_bashrc 2>/dev/null || true
+  dotfiles_shell_startup_install 2>/dev/null || true
   # Fijar las host keys de GitHub/Bitbucket en ~/.ssh/known_hosts para que
   # git/ssh functionen fuera del panel (p. ej. el launcher del repo privado).
   if ! ui_seed_known_hosts 2>/dev/null; then
@@ -987,6 +988,12 @@ if command -v nvim >/dev/null 2>&1; then
     failed=1
   fi
 fi
+if bash -ic 'command -v opencode >/dev/null 2>&1 && command -v nvim >/dev/null 2>&1' >/dev/null 2>&1; then
+  echo "##log Shell nueva carga el entorno (sin exec \$SHELL)"
+else
+  echo "##warn Una bash nueva no carga el entorno automaticamente"
+  failed=1
+fi
 if [ -x "$HOME/.local/bin/sync-dotfiles" ]; then
   echo "##log Ejecutando sync-dotfiles doctor"
   "$HOME/.local/bin/sync-dotfiles" doctor 2>&1 | tail -n 20 || true
@@ -1010,6 +1017,11 @@ if dotfiles_env_install_bashrc; then
   echo "PATH persistido en ~/.bashrc"
 else
   echo "##warn No se pudo persistir el PATH en ~/.bashrc"
+fi
+if dotfiles_shell_startup_install; then
+  echo "Entorno cargado automaticamente en shells nuevas"
+else
+  echo "##warn No se pudo configurar el arranque de shell"
 fi
 # La contrasena de sudo solo vive en el estado efimero del TUI; se borra al
 # terminar (defensa en profundidad, ademas del RemoveAll de nui).

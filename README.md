@@ -31,9 +31,11 @@ launcher privado además descarga ese pin y lo usa vía `GIT_SSH_COMMAND`, para
 que `git`/`ssh` funcionen aunque el `known_hosts` del usuario esté vacío.
 
 El PATH de las herramientas instaladas (nvm, opencode, herdr, nvim,
-`~/.local/bin`) se persiste automáticamente: el instalador agrega a `~/.bashrc`
-un bloque gestionado que carga `~/.config/enviroment-dotfiles/env.sh`. Abre una
-terminal nueva para usarlo; también puedes cargarlo en la actual:
+`~/.local/bin`) se persiste automáticamente: el instalador agrega bloques
+gestionados que cargan `~/.config/enviroment-dotfiles/env.sh` desde `~/.bashrc`,
+`~/.profile` (que a su vez carga `~/.bashrc` en bash) y `~/.zshrc` si zsh está
+instalado. Por eso **una terminal nueva ya trae todo cargado, sin ejecutar
+`exec $SHELL`**. También puedes cargarlo en la sesión actual:
 
 ```bash
 . "$HOME/.config/enviroment-dotfiles/env.sh"
