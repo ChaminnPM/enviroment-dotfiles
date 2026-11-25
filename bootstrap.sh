@@ -988,7 +988,15 @@ if command -v nvim >/dev/null 2>&1; then
     failed=1
   fi
 fi
-if bash -ic 'command -v opencode >/dev/null 2>&1 && command -v nvim >/dev/null 2>&1' >/dev/null 2>&1; then
+# Usar timeout: una bash interactiva o un doctor con clone de red no deben
+# dejar colgado el panel si algo en el entorno nuevo se comporta distinto.
+if command -v timeout >/dev/null 2>&1; then
+  shell_probe=(timeout 20 bash -ic)
+else
+  shell_probe=(bash -ic)
+fi
+if "${shell_probe[@]}" 'command -v opencode >/dev/null 2>&1 && command -v nvim >/dev/null 2>&1' \
+    </dev/null >/dev/null 2>&1; then
   echo "##log Shell nueva carga el entorno (sin exec \$SHELL)"
 else
   echo "##warn Una bash nueva no carga el entorno automaticamente"
@@ -996,7 +1004,11 @@ else
 fi
 if [ -x "$HOME/.local/bin/sync-dotfiles" ]; then
   echo "##log Ejecutando sync-dotfiles doctor"
-  "$HOME/.local/bin/sync-dotfiles" doctor 2>&1 | tail -n 20 || true
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 60 "$HOME/.local/bin/sync-dotfiles" doctor 2>&1 | tail -n 20 || true
+  else
+    "$HOME/.local/bin/sync-dotfiles" doctor 2>&1 | tail -n 20 || true
+  fi
 else
   echo "##warn sync-dotfiles no instalado"
 fi

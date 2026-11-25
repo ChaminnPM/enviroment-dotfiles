@@ -599,7 +599,11 @@ ui_seed_known_hosts() {
   }
   if ! {
     cat "$src"
-    [ -f "$HOME/.ssh/known_hosts" ] && cat "$HOME/.ssh/known_hosts"
+    # Con pipefail, un `[ -f ... ] && cat` que falla (archivo nuevo) hace que
+    # todo el pipeline falle; usar if evita el falso error en maquina limpia.
+    if [ -f "$HOME/.ssh/known_hosts" ]; then
+      cat "$HOME/.ssh/known_hosts"
+    fi
   } | sort -u > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
     ui_error "No se pudo fusionar $HOME/.ssh/known_hosts"
