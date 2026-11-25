@@ -15,6 +15,7 @@ chmod 700 "$LOG_DIR" 2>/dev/null || true
 
 REPO_URL="${REPO_URL:-git@github.com:ChaminnPM/enviroment-dotfiles-secrets.git}"
 REPO_REF="${REPO_REF:-main}"
+KH_URL="${KH_URL:-https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/config/ssh/known_hosts}"
 ARGS=()
 
 usage() {
@@ -119,16 +120,40 @@ ensure_cmd tar tar
 ensure_cmd gzip gzip
 ensure_cmd ssh openssh-client
 
-# Fallar temprano y con mensaje claro si la llave SSH no esta configurada.
-if command -v timeout >/dev/null 2>&1; then
-  ssh_ok=0
-  timeout 25 git ls-remote --heads "$REPO_URL" >/dev/null 2>&1 && ssh_ok=1
+# El repo publico fija las host keys en ~/.ssh/known_hosts, pero el launcher
+# debe ser autocontenido: con curl|bash ssh no puede preguntar la host key.
+# Descargamos el pin publico y lo usamos para ls-remote/clone (y para el
+# install.sh privado, que hereda GIT_SSH_COMMAND).
+KH_FILE="$TMP_REPO/known_hosts"
+if curl -fsSL --retry 2 --max-time 30 "$KH_URL" -o "$KH_FILE" 2>/dev/null && [ -s "$KH_FILE" ]; then
+  chmod 600 "$KH_FILE" 2>/dev/null || true
+  export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KH_FILE -o BatchMode=yes -o ConnectTimeout=15"
 else
-  git ls-remote --heads "$REPO_URL" >/dev/null 2>&1 && ssh_ok=1
+  printf '[WARN] No se pudo descargar el known_hosts pinnado; se usara SSH por defecto\n' >&2
 fi
-if [ "${ssh_ok:-0}" != "1" ]; then
+
+ssh_err="$LOG_DIR/ssh-access-$$.log"
+ssh_ok=0
+if command -v timeout >/dev/null 2>&1; then
+  timeout 25 git ls-remote --heads "$REPO_URL" >/dev/null 2>"$ssh_err" && ssh_ok=1
+else
+  git ls-remote --heads "$REPO_URL" >/dev/null 2>"$ssh_err" && ssh_ok=1
+fi
+if [ "$ssh_ok" != "1" ]; then
   printf '[ERROR] No hay acceso SSH a %s.\n' "$REPO_URL" >&2
-  printf '        Configura tu llave de GitHub (paso de identidad del repo publico).\n' >&2
+  if grep -qi 'Host key verification failed' "$ssh_err" 2>/dev/null; then
+    printf '        Causa: host key de GitHub no verificada. Relanza el instalador publico\n' >&2
+    printf '        (fija ~/.ssh/known_hosts) o revisa GIT_SSH_COMMAND.\n' >&2
+  elif grep -qi 'Permission denied' "$ssh_err" 2>/dev/null; then
+    printf '        Causa: la clave no esta registrada en GitHub (Permission denied).\n' >&2
+    if [ -f "$HOME/.ssh/id_ed25519_personal.pub" ]; then
+      printf '        Llave publica: %s\n' "$(cat "$HOME/.ssh/id_ed25519_personal.pub" 2>/dev/null)" >&2
+    fi
+    printf '        Registrala en https://github.com/settings/keys\n' >&2
+  elif grep -qiE 'timed out|could not resolve|connection refused|network' "$ssh_err" 2>/dev/null; then
+    printf '        Causa: problema de red/timeout al contactar GitHub.\n' >&2
+  fi
+  tail -n 8 "$ssh_err" >&2 2>/dev/null || true
   exit 1
 fi
 

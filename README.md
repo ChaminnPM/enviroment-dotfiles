@@ -25,6 +25,11 @@ Para el repo privado (`enviroment-dotfiles-secrets`) usa el launcher público, q
 curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install-private.sh | bash
 ```
 
+El instalador fija las host keys de GitHub/Bitbucket en
+`~/.ssh/known_hosts` desde `config/ssh/known_hosts` (sin `ssh-keyscan`). El
+launcher privado además descarga ese pin y lo usa vía `GIT_SSH_COMMAND`, para
+que `git`/`ssh` funcionen aunque el `known_hosts` del usuario esté vacío.
+
 El PATH de las herramientas instaladas (nvm, opencode, herdr, nvim,
 `~/.local/bin`) se persiste automáticamente: el instalador agrega a `~/.bashrc`
 un bloque gestionado que carga `~/.config/enviroment-dotfiles/env.sh`. Abre una
@@ -137,6 +142,15 @@ fc-list | grep -i JetBrains | head
 ```
 
 Si no hay archivos, ejecuta ese paso con `bash install.sh --only "Fuente"`.
+
+**Falta compilador C para nvim/LazyVim.** El instalador agrega `build-essential`
+(a o `gcc gcc-c++ make` / `base-devel` / `build-base` segun la distro) cuando no
+hay `cc`/`gcc`, porque `nvim-treesitter` y otros plugins nativos se compilan. Si
+no hay sudo, instálalo manualmente y relanza "Paquetes custom":
+
+```bash
+sudo apt install -y build-essential    # Debian/Ubuntu/WSL
+```
 
 **Fallo al instalar neovim, nvm, OpenCode o herdr.** Vuelve a ejecutar el paso
 correspondiente; si el fallo persiste, revisa los logs en

@@ -507,22 +507,13 @@ if [ "${#ACC_SLUG[@]}" -gt 0 ]; then
   say "Cada llave sera copiada, su plataforma sera abierta y se pedira confirmacion antes de probarla."
 fi
 
-# --- comprobacion SSH (solo standalone) ---------------------------------------
-ssh_check() {
-  local title="$1" target="$2" kh="${REPO_DIR:-}/config/ssh/known_hosts" out
-  ui_seed_known_hosts || return 1
-  # Pin de host keys: nunca accept-new ( permitiria MITM en el primer contacto).
-  local -a ssh_opts=(-T -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10)
-  [ -f "$kh" ] && ssh_opts+=(-o "UserKnownHostsFile=$kh")
-  if out="$(ssh "${ssh_opts[@]}" "$target" 2>&1 || true)"; then
-    if printf '%s\n' "$out" | grep -Eiq 'successfully authenticated|authenticated via ssh key|logged in as'; then
-      say "$title OK"
-      return 0
-    fi
-  fi
-  say "$title falla (revisa que la clave este agregada)."
-  return 1
-}
+# Fijar host keys tambien en modo standalone: sin esto, un git/ssh posterior
+# fuera del panel falla con "Host key verification failed" en maquina nueva.
+if ui_seed_known_hosts; then
+  say "Host keys de GitHub/Bitbucket fijadas en ~/.ssh/known_hosts"
+else
+  say "No se pudieron fijar las host keys en ~/.ssh/known_hosts"
+fi
 
 if [ "$PANEL_MODE" != "1" ] && [ "${NUI_NONINTERACTIVE:-0}" != "1" ] && ui_interactive; then
   say "Claves preparadas. Usa el paso 'Registrar y probar llaves SSH' para copiarlas, abrir cada plataforma y comprobarlas una a una."

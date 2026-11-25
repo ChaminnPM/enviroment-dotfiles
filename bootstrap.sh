@@ -58,6 +58,11 @@ if [ "${NUI_DRY_RUN:-0}" != "1" ]; then
   # El env file se genera en ~/.config/enviroment-dotfiles/env.sh; sin esta
   # linea ~/.bashrc nunca lo carga y una terminal nueva no ve los binarios.
   dotfiles_env_install_bashrc 2>/dev/null || true
+  # Fijar las host keys de GitHub/Bitbucket en ~/.ssh/known_hosts para que
+  # git/ssh functionen fuera del panel (p. ej. el launcher del repo privado).
+  if ! ui_seed_known_hosts 2>/dev/null; then
+    printf '[WARN] No se pudieron fijar las host keys en ~/.ssh/known_hosts\n' >&2
+  fi
 fi
 
 APT_PREFIX="$(ui_apt_prefix)"
@@ -81,6 +86,10 @@ if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; then
   command -v xclip >/dev/null 2>&1 || APT_PKGS+=(xclip)
 fi
 command -v ssh-keygen >/dev/null 2>&1 || APT_PKGS+=(openssh-client)
+# LazyVim/nvim-treesitter compila plugins nativos: sin compilador fallan.
+if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+  APT_PKGS+=(build-essential)
+fi
 # Gestor de paquetes: se detecta una vez y se usa en todos los pasos.
 PKG_MGR="$(ui_pkg_manager || true)"
 export PKG_MGR
@@ -92,6 +101,10 @@ if [ -n "$PKG_MGR" ] && [ "$PKG_MGR" != "apt-get" ]; then
     case "$PKG_MGR:$_p" in
       dnf:openssh-client) _mapped+=(openssh-clients) ;;
       pacman:openssh-client) _mapped+=(openssh) ;;
+      dnf:build-essential) _mapped+=(gcc gcc-c++ make) ;;
+      pacman:build-essential) _mapped+=(base-devel) ;;
+      zypper:build-essential) _mapped+=(gcc gcc-c++ make) ;;
+      apk:build-essential) _mapped+=(build-base) ;;
       *) _mapped+=("$_p") ;;
     esac
   done
@@ -645,6 +658,10 @@ if printf '%s\n' ${SELECTED} | grep -qx 'lazyvim'; then
   need_nvim=1
 fi
 if [ "$need_nvim" = "1" ]; then
+  if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+    echo "##warn No hay compilador C; los plugins nativos de LazyVim no compilaran"
+    echo "##log Instala build-essential (apt/dnf) o base-devel (pacman)"
+  fi
   if ! ensure_nvim; then
     echo "##warn neovim quedo sin la version requerida (> 0.11.2)"
   fi
@@ -956,6 +973,12 @@ check_bin herdr herdr
 check_bin Node node
 check_bin npm npm
 check_bin Neovim nvim
+if command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; then
+  echo "##log Compilador C OK"
+else
+  echo "##warn Compilador C no encontrado (nvim-treesitter/LazyVim)"
+  failed=1
+fi
 if command -v nvim >/dev/null 2>&1; then
   cur="$(nvim --version 2>/dev/null | sed -n 's/^NVIM v\([0-9][0-9.]*\).*/\1/p' | head -1)"
   got="$(printf '%s' "${cur:-0}" | awk -F. '{print $1*10000+$2*100+$3}')"
