@@ -59,6 +59,8 @@ if [ "${NUI_DRY_RUN:-0}" != "1" ]; then
   # linea ~/.bashrc nunca lo carga y una terminal nueva no ve los binarios.
   dotfiles_env_install_bashrc 2>/dev/null || true
   dotfiles_shell_startup_install 2>/dev/null || true
+  # Login shells (WSL/SSH/bash -l) leen ~/.bash_profile, que opaca a ~/.profile.
+  dotfiles_bash_profile_install 2>/dev/null || true
   # Fijar las host keys de GitHub/Bitbucket en ~/.ssh/known_hosts para que
   # git/ssh functionen fuera del panel (p. ej. el launcher del repo privado).
   if ! ui_seed_known_hosts 2>/dev/null; then
@@ -1004,21 +1006,41 @@ if command -v nvim >/dev/null 2>&1; then
   fi
   rm -f "$nv_log" 2>/dev/null || true
 fi
-# Comprobacion estatica: nada de `bash -ic` (puede esperar en /dev/tty).
+# Comprobacion por CONTENIDO, no solo por marcador: un bloque vacio (solo los
+# # >>> / # <<<) pasaba el grep y daba falso positivo en maquina limpia.
+# Nada de `bash -ic`: puede esperar en /dev/tty y colgar el panel.
 envfile="${NUI_ENV_FILE:-$HOME/.config/enviroment-dotfiles/env.sh}"
+startup_block_has() { # <archivo> <header> <footer> <texto-requerido>
+  local file="$1" h="$2" f="$3" need="$4" body
+  [ -f "$file" ] || return 1
+  body="$(awk -v b="$h" -v e="$f" \
+    '$0==b{on=1;next} $0==e{on=0;next} on{print}' "$file" 2>/dev/null)"
+  [ -n "$body" ] || return 1
+  printf '%s\n' "$body" | grep -qF -- "$need"
+}
 shell_ok=1
-[ -f "$envfile" ] || shell_ok=0
-grep -qF 'dotfiles-env' "$HOME/.bashrc" 2>/dev/null || shell_ok=0
-grep -qF 'dotfiles-profile' "$HOME/.profile" 2>/dev/null || shell_ok=0
-if [ -f "$HOME/.bash_profile" ]; then
-  grep -qF 'dotfiles-shell' "$HOME/.bash_profile" 2>/dev/null \
-    || grep -qF '.bashrc' "$HOME/.bash_profile" 2>/dev/null \
-    || shell_ok=0
-fi
+[ -s "$envfile" ] || shell_ok=0
+startup_block_has "$HOME/.bashrc" '# >>> dotfiles-env (no editar)' \
+  '# <<< dotfiles-env' "$envfile" || shell_ok=0
+startup_block_has "$HOME/.profile" '# >>> dotfiles-profile (no editar)' \
+  '# <<< dotfiles-profile' "$envfile" || shell_ok=0
+startup_block_has "$HOME/.bash_profile" '# >>> dotfiles-shell (no editar)' \
+  '# <<< dotfiles-shell' '.bashrc' || shell_ok=0
 if [ "$shell_ok" = "1" ]; then
-  echo "##log Shell nueva carga el entorno (sin exec \$SHELL)"
+  echo "##log Bloques de arranque de shell con contenido (sin exec \$SHELL)"
 else
-  echo "##warn Faltan bloques de arranque de shell en los dotfiles"
+  echo "##warn Bloques de arranque vacios/incompletos; relanza 'Persistencia de entorno'"
+  failed=1
+fi
+# Prueba funcional: bash -lc es login NO interactivo (sin prompts ni /dev/tty),
+# lee ~/.bash_profile y debe ver el PATH persistido. env -i evita heredar el
+# PATH del instalador; timeout -k evita cuelgues.
+if run_limited 15 env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH=/usr/bin:/bin \
+    bash -lc 'case ":$PATH:" in *":$HOME/.local/bin:"*) exit 0;; *) exit 1;; esac' \
+    </dev/null >/dev/null 2>&1; then
+  echo "##log bash -lc carga el PATH persistido"
+else
+  echo "##warn bash -lc no cargo el PATH persistido"
   failed=1
 fi
 if [ -x "$HOME/.local/bin/sync-dotfiles" ]; then
@@ -1047,9 +1069,6 @@ EOF
 ui_panel_step "Persistencia de entorno" --estimate 10 <<'EOF'
 # shellcheck source=lib/dotfiles.sh
 source "$REPO_DIR/scripts/lib/dotfiles.sh"
-bp="$HOME/.bash_profile"
-[ -f "$bp" ] || { : > "$bp"; chmod 644 "$bp" 2>/dev/null || true; }
-dotfiles_backup "$bp" || true
 if dotfiles_env_install_bashrc; then
   echo "PATH persistido en ~/.bashrc"
 else
@@ -1060,19 +1079,14 @@ if dotfiles_shell_startup_install; then
 else
   echo "##warn No se pudo configurar el arranque de shell"
 fi
+if dotfiles_bash_profile_install; then
+  echo "Login shell (~/.bash_profile) carga ~/.bashrc"
+else
+  echo "##warn No se pudo configurar ~/.bash_profile"
+fi
 # La contrasena de sudo solo vive en el estado efimero del TUI; se borra al
 # terminar (defensa en profundidad, ademas del RemoveAll de nui).
 rm -f "${NUI_STATE_DIR:-}/sudo-pass" 2>/dev/null || true
-bp_header='# >>> dotfiles-shell (no editar)'
-bp_footer='# <<< dotfiles-shell'
-bp_tmp="$(mktemp)"
-printf '%s\n' '[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"'
-if dotfiles_managed_block "$bp" "$bp_header" "$bp_footer" append "$(dotfiles_file_mode "$bp")" < "$bp_tmp"; then
-  echo "Entorno persistente"
-else
-  echo "##warn ~/.bash_profile tiene un bloque incompleto; no se modifico"
-fi
-rm -f "$bp_tmp"
 EOF
 
 rc=0

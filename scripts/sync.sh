@@ -156,6 +156,35 @@ if [ "$MODE" = "doctor" ]; then
     d_warn ".bashrc sin bloque gestionado de oh-my-bash"
   fi
 
+  # Bloques de arranque con CONTENIDO: un bloque vacio (solo # >>> / # <<<)
+  # pasaba el grep de marcador y daba falso positivo en maquina limpia.
+  startup_block_has() { # <archivo> <header> <footer> <texto-requerido>
+    local file="$1" h="$2" f="$3" need="$4" body
+    [ -f "$file" ] || return 1
+    body="$(awk -v b="$h" -v e="$f" \
+      '$0==b{on=1;next} $0==e{on=0;next} on{print}' "$file" 2>/dev/null)"
+    [ -n "$body" ] || return 1
+    printf '%s\n' "$body" | grep -qF -- "$need"
+  }
+  if startup_block_has "$HOME/.bashrc" '# >>> dotfiles-env (no editar)' \
+      '# <<< dotfiles-env' 'env.sh'; then
+    d_ok ".bashrc carga env.sh"
+  else
+    d_warn ".bashrc sin bloque dotfiles-env efectivo (relanza 'Persistencia de entorno')"
+  fi
+  if startup_block_has "$HOME/.bash_profile" '# >>> dotfiles-shell (no editar)' \
+      '# <<< dotfiles-shell' '.bashrc'; then
+    d_ok ".bash_profile carga .bashrc (login shell)"
+  else
+    d_warn ".bash_profile no carga .bashrc (relanza 'Persistencia de entorno')"
+  fi
+  if startup_block_has "$HOME/.profile" '# >>> dotfiles-profile (no editar)' \
+      '# <<< dotfiles-profile' 'env.sh'; then
+    d_ok ".profile carga el entorno"
+  else
+    d_warn ".profile sin bloque dotfiles-profile efectivo"
+  fi
+
   # nui vs pin del repo
   pin="$(cat "$REPO_DIR/bin/VERSION" 2>/dev/null || true)"
   if command -v nui >/dev/null 2>&1 || [ -x "$HOME/.local/bin/nui" ]; then

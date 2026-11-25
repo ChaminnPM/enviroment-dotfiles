@@ -294,6 +294,33 @@ dotfiles_shell_startup_install() {
   return 0
 }
 
+# dotfiles_bash_profile_install: garantiza que una shell de LOGIN cargue el
+# entorno. ~/.bash_profile tiene prioridad sobre ~/.profile: si se crea con el
+# bloque vacio (solo marcadores), una terminal nueva en WSL/SSH/bash -l no ve
+# el PATH ni oh-my-bash y el usuario tiene que sourcear ~/.bashrc a mano.
+# env.sh se carga aqui tambien (es idempotente) para que `bash -lc` no
+# interactivo funcione aunque ~/.bashrc tenga el guard de `return` inicial.
+dotfiles_bash_profile_install() {
+  local bp="$HOME/.bash_profile" header='# >>> dotfiles-shell (no editar)'
+  local footer='# <<< dotfiles-shell' envfile tmp
+  envfile="$(dotfiles_env_file)"
+  [ -n "$envfile" ] || return 1
+  [ -e "$bp" ] || { : > "$bp"; chmod 644 "$bp" 2>/dev/null || true; }
+  dotfiles_backup "$bp" || true
+  tmp="$(mktemp)" || return 1
+  {
+    printf '[ -f %q ] && . %q\n' "$envfile" "$envfile"
+    printf '%s\n' '[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"'
+  } > "$tmp"
+  if dotfiles_managed_block "$bp" "$header" "$footer" append \
+      "$(dotfiles_file_mode "$bp")" < "$tmp"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
 # dotfiles_sudo_run <timeout> <cmd...>
 # Reutiliza la contraseña capturada una vez por el paso interactivo de sudo.
 # Los pasos del panel no tienen TTY y cada uno es un bash -c distinto, por lo

@@ -54,6 +54,30 @@ jobs:
             scripts/setup-git-identity.sh scripts/update-external-skills.sh \
             scripts/apply-theme.sh scripts/gen-theme-go.sh ui/build.sh
 
+      - name: Arranque de shell con HOME temporal
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          export HOME="$tmp/home"
+          mkdir -p "$HOME"
+          # shellcheck source=scripts/lib/dotfiles.sh
+          . scripts/lib/dotfiles.sh
+          dotfiles_env_path_add "$HOME/.local/bin"
+          dotfiles_env_install_bashrc
+          dotfiles_shell_startup_install
+          dotfiles_bash_profile_install
+          # ~/.bash_profile debe tener contenido real, no solo los marcadores
+          body="$(awk '/^# >>> dotfiles-shell/{on=1;next} /^# <<< dotfiles-shell/{on=0;next} on{print}' "$HOME/.bash_profile")"
+          printf '%s\n' "$body" | grep -qF '.bashrc'
+          grep -qF 'dotfiles-env' "$HOME/.bashrc"
+          grep -qF 'dotfiles-profile' "$HOME/.profile"
+          test -s "$HOME/.config/enviroment-dotfiles/env.sh"
+          # Login shell nueva, sin PATH heredado, debe ver el directorio persistido
+          env -i HOME="$HOME" USER="$(id -un)" PATH=/usr/bin:/bin bash -lc \
+            'case ":$PATH:" in *":$HOME/.local/bin:"*) exit 0;; *) exit 1;; esac'
+          rm -rf "$tmp"
+          echo 'arranque de shell: OK'
+
       - name: Sin secretos en archivos versionados
         run: |
           set -euo pipefail

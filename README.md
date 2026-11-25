@@ -33,9 +33,10 @@ que `git`/`ssh` funcionen aunque el `known_hosts` del usuario esté vacío.
 El PATH de las herramientas instaladas (nvm, opencode, herdr, nvim,
 `~/.local/bin`) se persiste automáticamente: el instalador agrega bloques
 gestionados que cargan `~/.config/enviroment-dotfiles/env.sh` desde `~/.bashrc`,
-`~/.profile` (que a su vez carga `~/.bashrc` en bash) y `~/.zshrc` si zsh está
-instalado. Por eso **una terminal nueva ya trae todo cargado, sin ejecutar
-`exec $SHELL`**. También puedes cargarlo en la sesión actual:
+`~/.profile`, `~/.bash_profile` (para shells de login, que tienen prioridad sobre
+`~/.profile` en WSL/SSH/`bash -l`) y `~/.zshrc` si zsh está instalado. Por eso
+**una terminal nueva ya trae todo cargado, sin ejecutar `exec $SHELL`**. También
+puedes cargarlo en la sesión actual:
 
 ```bash
 . "$HOME/.config/enviroment-dotfiles/env.sh"
@@ -119,6 +120,22 @@ puede cargarse sin reemplazar la shell:
 ```bash
 . "$HOME/.config/enviroment-dotfiles/env.sh"   # o abre una terminal nueva
 ```
+
+**Una terminal nueva no carga la configuración (WSL / login shell).** Si
+`shopt -q login_shell` imprime `SÍ`, bash lee `~/.bash_profile`, que opaca a
+`~/.profile`. El bloque `dotfiles-shell` debe contener la línea de
+`source ~/.bashrc`; si solo tiene los marcadores (`# >>>` / `# <<<`), la shell
+nueva no ve el PATH ni oh-my-bash y parece que "nada se cargó". Comprueba y
+repara:
+
+```bash
+sed -n '/^# >>> dotfiles-shell/,/^# <<< dotfiles-shell/p' "$HOME/.bash_profile"
+bash install.sh --only "Persistencia de entorno"
+env -i HOME="$HOME" USER="$USER" PATH=/usr/bin:/bin bash -lc 'command -v opencode'
+```
+
+`sync-dotfiles doctor` también verifica el contenido de los bloques de arranque,
+no solo que existan los marcadores.
 
 **Aviso `Contraseña sudo no activa; el gestor de paquetes no instalara nada`.**
 El paso interactivo "Credenciales sudo" pide la contraseña una sola vez y la
