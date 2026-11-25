@@ -959,6 +959,16 @@ source "$REPO_DIR/scripts/lib/dotfiles.sh"
 dotfiles_env_load 2>/dev/null || true
 export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$HOME/.herdr/bin:$PATH"
 failed=0
+# Todo lo que pueda esperar va con timeout -k: con solo TERM, un hijo que lo
+# ignora deja colgado el panel indefinidamente.
+run_limited() {
+  local secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 5 "$secs" "$@"
+  else
+    "$@"
+  fi
+}
 check_bin() {
   local label="$1" bin="$2" p
   p="$(command -v "$bin" 2>/dev/null || true)"
@@ -980,38 +990,53 @@ else
   echo "##warn Compilador C no encontrado (nvim-treesitter/LazyVim)"
   failed=1
 fi
+echo "##progress 95"
 if command -v nvim >/dev/null 2>&1; then
-  cur="$(nvim --version 2>/dev/null | sed -n 's/^NVIM v\([0-9][0-9.]*\).*/\1/p' | head -1)"
+  nv_log="$LOG_DIR/nvim-version-$$.log"
+  cur=""
+  if run_limited 15 nvim --version >"$nv_log" 2>/dev/null; then
+    cur="$(sed -n 's/^NVIM v\([0-9][0-9.]*\).*/\1/p' "$nv_log" 2>/dev/null | head -1)"
+  fi
   got="$(printf '%s' "${cur:-0}" | awk -F. '{print $1*10000+$2*100+$3}')"
   if [ "${got:-0}" -le 1102 ]; then
     echo "##warn Neovim ${cur:-?} no supera la version requerida 0.11.2"
     failed=1
   fi
+  rm -f "$nv_log" 2>/dev/null || true
 fi
-# Usar timeout: una bash interactiva o un doctor con clone de red no deben
-# dejar colgado el panel si algo en el entorno nuevo se comporta distinto.
-if command -v timeout >/dev/null 2>&1; then
-  shell_probe=(timeout 20 bash -ic)
-else
-  shell_probe=(bash -ic)
+# Comprobacion estatica: nada de `bash -ic` (puede esperar en /dev/tty).
+envfile="${NUI_ENV_FILE:-$HOME/.config/enviroment-dotfiles/env.sh}"
+shell_ok=1
+[ -f "$envfile" ] || shell_ok=0
+grep -qF 'dotfiles-env' "$HOME/.bashrc" 2>/dev/null || shell_ok=0
+grep -qF 'dotfiles-profile' "$HOME/.profile" 2>/dev/null || shell_ok=0
+if [ -f "$HOME/.bash_profile" ]; then
+  grep -qF 'dotfiles-shell' "$HOME/.bash_profile" 2>/dev/null \
+    || grep -qF '.bashrc' "$HOME/.bash_profile" 2>/dev/null \
+    || shell_ok=0
 fi
-if "${shell_probe[@]}" 'command -v opencode >/dev/null 2>&1 && command -v nvim >/dev/null 2>&1' \
-    </dev/null >/dev/null 2>&1; then
+if [ "$shell_ok" = "1" ]; then
   echo "##log Shell nueva carga el entorno (sin exec \$SHELL)"
 else
-  echo "##warn Una bash nueva no carga el entorno automaticamente"
+  echo "##warn Faltan bloques de arranque de shell en los dotfiles"
   failed=1
 fi
 if [ -x "$HOME/.local/bin/sync-dotfiles" ]; then
   echo "##log Ejecutando sync-dotfiles doctor"
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 60 "$HOME/.local/bin/sync-dotfiles" doctor 2>&1 | tail -n 20 || true
+  doc_log="$LOG_DIR/doctor-$$.log"
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  # Sin pipe directo: un nieto (git clone del wrapper) podria mantener el pipe
+  # abierto y dejar `tail` esperando EOF para siempre.
+  if run_limited 25 "$HOME/.local/bin/sync-dotfiles" doctor >"$doc_log" 2>&1; then
+    tail -n 20 "$doc_log" 2>/dev/null | sed 's/^/##log /'
   else
-    "$HOME/.local/bin/sync-dotfiles" doctor 2>&1 | tail -n 20 || true
+    echo "##warn Doctor no termino a tiempo o fallo; revisa $doc_log"
+    tail -n 8 "$doc_log" 2>/dev/null | sed 's/^/##log /'
   fi
 else
   echo "##warn sync-dotfiles no instalado"
 fi
+echo "##progress 100"
 if [ "$failed" -ne 0 ]; then
   echo "##warn Hay herramientas pendientes; revisa los avisos del reporte"
   exit 1
