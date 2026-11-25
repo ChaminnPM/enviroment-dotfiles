@@ -49,10 +49,4 @@ for t in $TARGETS; do
 done
 
 printf '%s\n' "$VERSION" > "$OUT/VERSION"
-# Checksums para que ui_install_ui/install.sh puedan verificar las descargas.
-if command -v sha256sum >/dev/null 2>&1; then
-  ( cd "$OUT" && sha256sum nui-*.gz > SHA256SUMS )
-elif command -v shasum >/dev/null 2>&1; then
-  ( cd "$OUT" && shasum -a 256 nui-*.gz > SHA256SUMS )
-fi
 echo ">> listo: $(ls -1 "$OUT"/nui-*.gz | wc -l) binarios comprimidos (v${VERSION})"

@@ -38,7 +38,6 @@ jobs:
           bash -n scripts/update-external-skills.sh
           bash -n scripts/apply-theme.sh
           bash -n scripts/gen-theme-go.sh
-          bash -n scripts/gen-checksums.sh
           bash -n scripts/lib/theme.sh
           bash -n ui/build.sh
           for f in ui/examples/split-panel/*.sh; do
@@ -53,7 +52,7 @@ jobs:
           shellcheck -S warning install.sh bootstrap.sh scripts/sync.sh \
             scripts/lib/ui.sh scripts/lib/theme.sh scripts/lib/dotfiles.sh \
             scripts/setup-git-identity.sh scripts/update-external-skills.sh \
-            scripts/apply-theme.sh scripts/gen-theme-go.sh scripts/gen-checksums.sh ui/build.sh
+            scripts/apply-theme.sh scripts/gen-theme-go.sh ui/build.sh
 
       - name: Sin secretos en archivos versionados
         run: |
@@ -68,19 +67,6 @@ jobs:
             echo 'ERROR: SSH con accept-new'; exit 1
           fi
           echo 'secret scan y known_hosts: OK'
-
-      - name: Binarios nui y SHA256SUMS
-        run: |
-          set -euo pipefail
-          cd bin && sha256sum -c SHA256SUMS
-
-      - name: SHA256SUMS de scripts actualizado
-        run: |
-          set -euo pipefail
-          bash scripts/gen-checksums.sh
-          git diff --exit-code -- SHA256SUMS || {
-            echo 'SHA256SUMS desactualizado: ejecuta bash scripts/gen-checksums.sh'; exit 1; }
-          sha256sum -c --ignore-missing SHA256SUMS
 
       - name: Validar tema Dracula y plantillas TOML
         run: |

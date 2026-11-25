@@ -1,5 +1,4 @@
 *
 !*.gz
 !VERSION
-!SHA256SUMS
 !.gitignore

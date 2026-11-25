@@ -44,25 +44,6 @@ HELP
   shift
 done
 
-# Verificacion de pin para instaladores remotos. Los cuerpos de ui_panel_step
-# corren en procesos bash aparte; se exporta la funcion para que la hereden
-# (cada paso que la usa sourcea scripts/lib/dotfiles.sh, que define
-# dotfiles_verify_sha256). Exigir el hash es el comportamiento por defecto;
-# NUI_ALLOW_UNVERIFIED=1 es un opt-out inseguro explicito.
-_require_pin() {
-  local file="$1" want="$2" name="$3" envname="$4"
-  if [ -z "$want" ]; then
-    if [ "${NUI_ALLOW_UNVERIFIED:-0}" != "1" ]; then
-      printf '##warn Falta %s (SHA256) para %s; fijalo o usa NUI_ALLOW_UNVERIFIED=1 (INSEGURO)\n' "$envname" "$name"
-      return 1
-    fi
-    printf '##warn %s SIN verificar (NUI_ALLOW_UNVERIFIED=1: INSEGURO)\n' "$name"
-    return 0
-  fi
-  dotfiles_verify_sha256 "$file" "$want" "$name"
-}
-export -f _require_pin
-
 if command -v dotfiles_assert_supported >/dev/null 2>&1; then
   dotfiles_assert_supported || exit 1
 fi
@@ -552,11 +533,6 @@ ensure_nvim() {
     rm -rf "$tmp"
     return 1
   fi
-  if ! _require_pin "$tmp/nvim.tgz" "${NEOVIM_SHA256:-}" "neovim" "NEOVIM_SHA256"; then
-    echo "##warn Checksum de neovim invalido o ausente; instalacion abortada"
-    rm -rf "$tmp"
-    return 1
-  fi
   if ! tar -xzf "$tmp/nvim.tgz" -C "$tmp"; then
     echo "##warn El tarball de neovim esta corrupto"
     rm -rf "$tmp"
@@ -633,10 +609,6 @@ if ! command -v node >/dev/null 2>&1; then
       echo "##warn No se pudo descargar el instalador de nvm $NVM_PIN"
       exit 1
     fi
-    if ! _require_pin "$nvm_tmp" "${NVM_SHA256:-}" "nvm-install" "NVM_SHA256"; then
-      echo "##warn Checksum de nvm invalido o ausente; instalacion abortada"
-      exit 1
-    fi
     bash "$nvm_tmp" >/dev/null 2>&1 \
       || echo "##warn No se pudo instalar nvm automáticamente"
     rm -f "$nvm_tmp"
@@ -683,10 +655,6 @@ if ! curl -fsSL --retry 3 --max-time 60 \
   echo "##warn No se pudo descargar el instalador de nvm v${want}"
   exit 1
 fi
-if ! _require_pin "$nvm_up_tmp" "${NVM_SHA256:-}" "nvm-install-v${want}" "NVM_SHA256"; then
-  echo "##warn Checksum de nvm invalido o ausente; actualizacion abortada"
-  exit 1
-fi
 if bash "$nvm_up_tmp" >/dev/null 2>&1 && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; then
   echo "##log nvm ahora: $(nvm --version 2>/dev/null || echo '?')"
 else
@@ -706,10 +674,6 @@ if ! command -v opencode >/dev/null 2>&1; then
   echo "##log Descargando instalador"
   if ! curl -fsSL --retry 3 --max-time 120 "$url" -o "$tmp_oc"; then
     echo "##warn No se pudo descargar el instalador de OpenCode"
-    exit 1
-  fi
-  if ! _require_pin "$tmp_oc" "${OPENCODE_SHA256:-}" "opencode-install" "OPENCODE_SHA256"; then
-    echo "##warn Checksum del instalador de OpenCode invalido o ausente"
     exit 1
   fi
   bash "$tmp_oc" --no-modify-path </dev/null >/dev/null 2>&1 \
@@ -815,10 +779,6 @@ if ! command -v herdr >/dev/null 2>&1; then
   trap 'rm -f "$herdr_tmp"' EXIT
   url="${HERDR_INSTALL_URL:-https://herdr.dev/install.sh}"
   if curl -fsSL --retry 3 --max-time 120 "$url" -o "$herdr_tmp"; then
-    if ! _require_pin "$herdr_tmp" "${HERDR_SHA256:-}" "herdr-install" "HERDR_SHA256"; then
-      echo "##warn Checksum del instalador de herdr invalido o ausente; abortado"
-      exit 1
-    fi
     sh "$herdr_tmp" </dev/null >/dev/null 2>&1 \
       || echo "##warn herdr no se instaló automáticamente"
   else

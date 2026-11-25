@@ -7,7 +7,6 @@ export PATH="$HOME/.local/bin:$PATH"
 LOG_DIR="${LOG_DIR:-$HOME/.local/state/enviroment-dotfiles/logs}"
 export VERBOSE="${VERBOSE:-0}"
 REPO_REF="${REPO_REF:-main}"
-REPO_SHA256="${REPO_SHA256:-}"
 BOOTSTRAP_ARGS=()
 
 case "$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')" in
@@ -56,9 +55,7 @@ Uso: install.sh [opciones]
   -h, --help           esta ayuda
 
 Variables: REPO_REF (rama/tag, default main; solo [A-Za-z0-9._-]),
-REPO_SHA256 (checksum SHA256 del tarball; OBLIGATORIO por defecto),
-NUI_BASE_URL, NUI_VERSION. Para omitir la verificacion del checksum (INSEGURO)
-fija NUI_ALLOW_UNVERIFIED=1.
+NUI_BASE_URL, NUI_VERSION.
 
 Solo Linux y WSL. macOS/Windows: ver docs/PLATFORMS.md.
 HELP
@@ -203,31 +200,6 @@ TARBALL="$TMP_REPO/repo.tar.gz"
 TARBALL_URL="https://github.com/ChaminnPM/enviroment-dotfiles/archive/refs/heads/${REPO_REF}.tar.gz"
 quiet_run "Descargando repositorio (tarball)..." \
   curl -fsSL --retry 3 --max-time 600 "$TARBALL_URL" -o "$TARBALL"
-
-# Fail-closed: sin checksum no se extrae ni se ejecuta nada del tarball.
-if [ -z "$REPO_SHA256" ]; then
-  if [ "${NUI_ALLOW_UNVERIFIED:-0}" != "1" ]; then
-    printf '[ERROR] REPO_SHA256 no definido: no se puede verificar el tarball descargado.\n' >&2
-    printf '        Obtenlo con: curl -fsSL --retry 3 --max-time 600 "%s" -o repo.tar.gz && sha256sum repo.tar.gz\n' "$TARBALL_URL" >&2
-    printf '        Luego exporta REPO_SHA256=<hash> y vuelve a ejecutar el instalador.\n' >&2
-    printf '        Omitir la verificacion es INSEGURO: NUI_ALLOW_UNVERIFIED=1 (opt-out).\n' >&2
-    exit 2
-  fi
-  printf '[WARN] REPO_SHA256 vacio: verificacion OMITIDA (NUI_ALLOW_UNVERIFIED=1, INSEGURO)\n' >&2
-else
-  if command -v sha256sum >/dev/null 2>&1; then
-    have="$(sha256sum "$TARBALL" | awk '{print $1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    have="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
-  else
-    have=""
-  fi
-  if [ -z "$have" ] || [ "$have" != "$REPO_SHA256" ]; then
-    printf '[ERROR] Checksum del tarball invalido (esperado %s, obtenido %s)\n' "$REPO_SHA256" "${have:-?}" >&2
-    exit 1
-  fi
-  printf '[OK] Checksum del tarball verificado\n'
-fi
 
 quiet_run "Extrayendo repositorio..." tar -xzf "$TARBALL" --strip-components=1 -C "$TMP_REPO"
 

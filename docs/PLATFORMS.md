@@ -25,7 +25,7 @@ antes de tocar nada.
 Requisitos:
 
 - `bash` >= 4 (el código usa arrays asociativos, `${var,,}` y `mapfile`).
-- `coreutils` GNU (`stat -c`, `date +%s%N`, `timeout`, `sha256sum`, `base64 -w0`).
+- `coreutils` GNU (`stat -c`, `date +%s%N`, `timeout`, `base64 -w0`).
 - `util-linux`/`procps` estándar; `rsync`, `git`, `curl`, `gzip`, `tar`.
 - `sudo` solo si se instalarán paquetes del sistema.
 
@@ -50,9 +50,9 @@ Lo que **no** funciona sin cambios:
    con separadores personalizados fallan. Haría falta `brew install bash` y
    reescribir el shebang o usar `/usr/local/bin/bash`.
 2. **Herramientas GNU**: el repo usa `stat -c`, `date -Iseconds`,
-   `base64 -w0`, `sed -i` sin backup, `timeout`, `sort -V`, `realpath -m` y
-   `sha256sum`. En macOS son BSD o no existen; habría que introducir un shim
-   (`gstat`, `gdate`, `gbase64`, `gtimeout`, `gsort`, `grealpath`, `shasum`).
+   `base64 -w0`, `sed -i` sin backup, `timeout`, `sort -V` y `realpath -m`.
+   En macOS son BSD o no existen; habría que introducir un shim
+   (`gstat`, `gdate`, `gbase64`, `gtimeout`, `gsort`, `grealpath`).
 3. **`install.sh`**: `curl | bash` funciona, pero `ensure_cmd` asume un gestor
    de paquetes Linux. Haría falta Homebrew y un mapeo de paquetes.
 4. **`bootstrap.sh`**: los pasos de fuente (fontconfig), Alacritty y

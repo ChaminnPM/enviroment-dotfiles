@@ -121,7 +121,6 @@ ui_install_ui() {
   local dest="$HOME/.local/bin/nui"
   local localgz="${REPO_DIR:-}/bin/nui-$UI_OS-$UI_ARCH.gz"
   local want="${NUI_VERSION:-}" have=""
-  local sums="" expect=""
 
   if [ "$UI_OS" = "unsupported" ]; then
     ui_error "Plataforma $UI_PLATFORM no soportada por nui (solo Linux/WSL; ver docs/PLATFORMS.md)"
@@ -144,11 +143,6 @@ ui_install_ui() {
     fi
   fi
 
-  # Checksum publicado junto a los binarios (opcional pero recomendado).
-  if [ -n "${REPO_DIR:-}" ] && [ -f "$REPO_DIR/bin/SHA256SUMS" ]; then
-    sums="$REPO_DIR/bin/SHA256SUMS"
-  fi
-
   # Importante: no usar ui_logged (spinner de nui) ni escribir directamente
   # sobre $dest, porque ese binario puede estar en ejecucion (ETXTBSY).
   # Se arma en un temporal y se reemplaza con mv.
@@ -157,14 +151,6 @@ ui_install_ui() {
   ui_info "Instalando nui${want:+ $want}..."
 
   if [ -f "$localgz" ]; then
-    if [ -n "$sums" ]; then
-      expect="$(awk -v f="$(basename "$localgz")" '$2 == f || $2 == "*"f {print $1; exit}' "$sums" 2>/dev/null || true)"
-      if [ -n "$expect" ] && ! dotfiles_verify_sha256 "$localgz" "$expect" "$(basename "$localgz")"; then
-        rm -f "$tmp"
-        ui_error "Checksum invalido para $(basename "$localgz"); instalacion abortada"
-        return 1
-      fi
-    fi
     # repo local: instalar sin red
     if ! gzip -dc "$localgz" > "$tmp" 2>/dev/null; then
       rm -f "$tmp"
@@ -179,24 +165,6 @@ ui_install_ui() {
       rm -f "$tmp" "$tmp.gz"
       ui_error "No se pudo descargar nui desde $url"
       return 1
-    fi
-    if [ -n "$sums" ]; then
-      expect="$(awk -v f="$(basename "$url")" '$2 == f || $2 == "*"f {print $1; exit}' "$sums" 2>/dev/null || true)"
-      if [ -n "$expect" ] && ! dotfiles_verify_sha256 "$tmp.gz" "$expect" "$(basename "$url")"; then
-        rm -f "$tmp" "$tmp.gz"
-        ui_error "Checksum invalido para $(basename "$url"); instalacion abortada"
-        return 1
-      fi
-    elif command -v curl >/dev/null 2>&1; then
-      sums="$(curl -fsSL --retry 2 --max-time 10 "$NUI_BASE_URL/bin/SHA256SUMS" 2>/dev/null || true)"
-      if [ -n "$sums" ]; then
-        expect="$(printf '%s\n' "$sums" | awk -v f="$(basename "$url")" '$2 == f || $2 == "*"f {print $1; exit}')"
-        if [ -n "$expect" ] && ! dotfiles_verify_sha256 "$tmp.gz" "$expect" "$(basename "$url")"; then
-          rm -f "$tmp" "$tmp.gz"
-          ui_error "Checksum invalido para $(basename "$url"); instalacion abortada"
-          return 1
-        fi
-      fi
     fi
     if ! gzip -dc "$tmp.gz" > "$tmp" 2>/dev/null; then
       rm -f "$tmp" "$tmp.gz"

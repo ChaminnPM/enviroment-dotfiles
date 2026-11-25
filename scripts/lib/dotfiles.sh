@@ -224,35 +224,6 @@ dotfiles_env_load() {
   . "$f"
 }
 
-# Hash SHA-256 portable (GNU coreutils / macOS shasum).
-dotfiles_sha256() {
-  local f="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$f" | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$f" | awk '{print $1}'
-  else
-    return 1
-  fi
-}
-
-# dotfiles_verify_sha256 <archivo> <hash esperado> [nombre]
-dotfiles_verify_sha256() {
-  local f="$1" want="$2" name="${3:-$(basename "$1")}" have
-  [ -n "$want" ] || return 0
-  have="$(dotfiles_sha256 "$f" 2>/dev/null || true)"
-  if [ -z "$have" ]; then
-    _dotfiles_msg "No hay sha256sum/shasum; no se puede verificar $name"
-    return 1
-  fi
-  if [ "$have" != "$want" ]; then
-    _dotfiles_msg "Checksum invalido para $name: esperado $want, obtenido $have"
-    return 1
-  fi
-  _dotfiles_msg "Checksum OK: $name"
-  return 0
-}
-
 # dotfiles_git_set <archivo> <clave> <valor>
 # Escribe con `git config --file` (sin interpolar en un printf ni en bash -c).
 dotfiles_git_set() {

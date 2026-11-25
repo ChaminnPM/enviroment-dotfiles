@@ -9,45 +9,15 @@ Incluye un tema canonico (**Dracula + JetBrainsMono Nerd Font**) que se aplica
 a todas las herramientas durante la instalacion, incluida la instalacion de
 la fuente.
 
-## Instalacion (verificada, recomendada)
+## Instalacion
 
-El instalador es **fail-closed**: exige `REPO_SHA256` para el tarball y
-`NVM_SHA256`, `NEOVIM_SHA256`, `OPENCODE_SHA256` y `HERDR_SHA256` para los
-instaladores remotos. El one-liner clásico solo funciona con
-`NUI_ALLOW_UNVERIFIED=1` (opt-out **inseguro**), así que la forma recomendada es
-descargar, verificar y ejecutar:
+En Linux o WSL, ejecuta:
 
 ```bash
-# El bloque se ejecuta en un subshell: sus `exit` no afectan a la sesion
-# interactiva que invoca el comando.
-(
-  set -euo pipefail
-  base="https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main"
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
-
-  curl -fsSL --retry 3 "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"
-  curl -fsSL --retry 3 "$base/install.sh"  -o "$tmp/install.sh"
-
-  # El nombre debe coincidir con la entrada "install.sh" del SHA256SUMS;
-  # --ignore-missing omitiria la comprobacion si el nombre difiriera.
-  want="$(awk '$2 == "install.sh" { print $1; exit }' "$tmp/SHA256SUMS")"
-  [ -n "$want" ] || { echo "[ERROR] SHA256SUMS no contiene install.sh" >&2; exit 1; }
-  printf '%s  %s\n' "$want" "$tmp/install.sh" | sha256sum -c -
-
-  # El hash del tarball se calcula aqui para pasar REPO_SHA256. install.sh
-  # lo comprueba de nuevo antes de extraer el contenido.
-  repo_url="https://github.com/ChaminnPM/enviroment-dotfiles/archive/refs/heads/main.tar.gz"
-  repo_sha="$(curl -fsSL --retry 3 --max-time 600 "$repo_url" | sha256sum | awk '{print $1}')"
-
-  REPO_SHA256="$repo_sha" \
-  NVM_SHA256="${NVM_SHA256:?define NVM_SHA256}" \
-  NEOVIM_SHA256="${NEOVIM_SHA256:?define NEOVIM_SHA256}" \
-  OPENCODE_SHA256="${OPENCODE_SHA256:?define OPENCODE_SHA256}" \
-  HERDR_SHA256="${HERDR_SHA256:?define HERDR_SHA256}" \
-    bash "$tmp/install.sh"
-)
+curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh | bash
 ```
+
+El instalador descarga el repo como **tarball** y no requiere `git` para empezar. Luego `bootstrap.sh` instala dependencias base (`git`, `curl`, `python3`, `tar`, `gzip`, `rsync`, `openssh-client`, etc.) antes de los pasos que las necesitan.
 
 La forma correcta de cargar el PATH y NVM al terminar es abrir una terminal
 nueva, o sourcear el archivo de entorno en la actual:
@@ -59,55 +29,6 @@ nueva, o sourcear el archivo de entorno en la actual:
 **No uses `exec "$SHELL"`**: reemplaza el proceso de la shell actual y, si la
 configuración de inicio falla o la terminal cierra al salir de esa shell, te
 deja fuera de la sesión.
-
-`SHA256SUMS` (raíz, generado con `bash scripts/gen-checksums.sh`) cubre los
-scripts de instalación; `bin/SHA256SUMS` cubre los binarios de `nui`, que están
-vendorizados y se verifican antes de instalarse.
-
-El instalador descarga el repo como **tarball** y no requiere `git` para empezar. Luego `bootstrap.sh` instala dependencias base (`git`, `curl`, `python3`, `tar`, `gzip`, `rsync`, `openssh-client`, etc.) antes de los pasos que las necesitan.
-
-### Como obtener los pins (una sola vez)
-
-Los cuatro hashes se calculan desde las URLs oficiales fijadas en
-`bootstrap.sh`. Es un modelo *trust-on-first-use*: calcúlalos una vez, guárdalos
-en un gestor de secretos y reutilízalos. Solo deben recalcularse cuando cambie
-la versión fijada (`NVM_VERSION`, `NEOVIM_VERSION`, etc.).
-
-```bash
-# nvm (NVM_VERSION por defecto: v0.40.8)
-curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | sha256sum
-
-# neovim (NEOVIM_VERSION por defecto: v0.11.4)
-curl -fsSL https://github.com/neovim/neovim/releases/download/v0.11.4/nvim-linux-x86_64.tar.gz | sha256sum
-# En arm64 usa nvim-linux-arm64.tar.gz. Si ese asset no existe, bootstrap
-# prueba nvim-linux64.tar.gz: calcula el hash de ese archivo en su lugar.
-
-# OpenCode
-curl -fsSL https://opencode.ai/v2/install | sha256sum
-
-# herdr
-curl -fsSL https://herdr.dev/install.sh | sha256sum
-```
-
-Luego exportalos antes del bloque de instalación:
-
-```bash
-export NVM_SHA256='...' NEOVIM_SHA256='...' OPENCODE_SHA256='...' HERDR_SHA256='...'
-```
-
-Si alguno falta o no coincide, el instalador se detiene **antes** de ejecutar
-ese instalador remoto. No lo eludas salvo en un entorno de prueba.
-
-### One-liner heredado (sin verificacion, desaconsejado)
-
-```bash
-export NUI_ALLOW_UNVERIFIED=1
-curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh | bash
-```
-
-Solo para entornos de prueba; en producción debe usarse la instalación
-verificada. Este modo produce avisos `SIN verificar
-(NUI_ALLOW_UNVERIFIED=1: INSEGURO)` para neovim, nvm, OpenCode y herdr.
 
 ## Seguridad
 
@@ -172,14 +93,12 @@ dirigida, ejecuta los pasos en orden.
 
 ### Solución de problemas
 
-Los comandos `bash install.sh --only ...` vuelven a descargar el repositorio y
-necesitan las mismas variables (`REPO_SHA256` y los pins) que la instalación
-verificada. Si la rama `main` cambió, debe obtenerse un `REPO_SHA256` nuevo.
+Los comandos `bash install.sh --only ...` vuelven a descargar el repositorio,
+así que requieren conexión y permisos sudo para los pasos que instalan paquetes.
 
 **La sesión interactiva termina al ejecutar el instalador.** Un `exit 1` suelto
-o un `exec "$SHELL"` cierran o reemplazan la shell que invocó el comando. El
-bloque de instalación se ejecuta en un subshell para que sus `exit` queden
-confinados. El PATH puede cargarse sin reemplazar la shell:
+o un `exec "$SHELL"` cierran o reemplazan la shell que invocó el comando. El PATH
+puede cargarse sin reemplazar la shell:
 
 ```bash
 . "$HOME/.config/enviroment-dotfiles/env.sh"   # o abre una terminal nueva
@@ -205,14 +124,11 @@ fc-list | grep -i JetBrains | head
 
 Si no hay archivos, ejecuta ese paso con `bash install.sh --only "Fuente"`.
 
-**Avisos `SIN verificar (NUI_ALLOW_UNVERIFIED=1: INSEGURO)`.** Significa que
-faltan pins. No son un fallo de npm ni de red: el instalador omitió la
-verificación de neovim, nvm, OpenCode o herdr. Desactiva la variable y vuelve
-a ejecutar con los hashes de la sección "Como obtener los pins":
+**Fallo al instalar neovim, nvm, OpenCode o herdr.** Vuelve a ejecutar el paso
+correspondiente; si el fallo persiste, revisa los logs en
+`~/.local/state/enviroment-dotfiles/logs/`:
 
 ```bash
-unset NUI_ALLOW_UNVERIFIED
-# exporta NVM_SHA256, NEOVIM_SHA256, OPENCODE_SHA256, HERDR_SHA256
 bash install.sh --only "Node + nvm"
 bash install.sh --only "OpenCode"
 bash install.sh --only "herdr"
@@ -228,8 +144,7 @@ cd "$HOME/.config/opencode" && npm install
 ```
 
 Casi siempre se debe a que Node/nvm no quedó en el PATH de la sesión actual
-(sourcea el env file o abre una terminal nueva) o a que los instaladores se
-ejecutaron sin verificar. Después repite:
+(sourcea el env file o abre una terminal nueva). Después repite:
 
 ```bash
 bash install.sh --only "Restaurar configuración"
