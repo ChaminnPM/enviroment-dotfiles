@@ -19,6 +19,12 @@ curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/
 
 El instalador descarga el repo como **tarball** y no requiere `git` para empezar. Luego `bootstrap.sh` instala dependencias base (`git`, `curl`, `python3`, `tar`, `gzip`, `rsync`, `openssh-client`, etc.) antes de los pasos que las necesitan.
 
+Para el repo privado (`enviroment-dotfiles-secrets`) usa el launcher público, que clona por SSH (raw no sirve repos privados):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install-private.sh | bash
+```
+
 El PATH de las herramientas instaladas (nvm, opencode, herdr, nvim,
 `~/.local/bin`) se persiste automáticamente: el instalador agrega a `~/.bashrc`
 un bloque gestionado que carga `~/.config/enviroment-dotfiles/env.sh`. Abre una
