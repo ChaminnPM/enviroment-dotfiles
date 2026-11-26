@@ -10,7 +10,7 @@ y sin Git Bash, con el mismo contrato que la capa bash
 | Cosa | Minimo | Nota |
 |---|---|---|
 | SO | Windows 10 22H2 x64 | Windows 11 recomendado. ARM64 best-effort. |
-| PowerShell | 5.1 | 7.x recomendado (`-WithPowerShell7` lo instala). |
+| PowerShell | 5.1 | Se instala 7.x; 5.1 solo tiene que poder arrancar el instalador. |
 | Terminal | Windows Terminal | Es el terminal objetivo; sustituye a Alacritty. |
 | Utilidades | `curl.exe`, `tar.exe`, `icacls.exe` | Vienen con Windows 10 1803+. |
 | OpenSSH Client | caracteristica del SO | `ssh`, `ssh-keygen`, `ssh-add`. |
@@ -33,14 +33,14 @@ scripts descargados y ejecuta `bootstrap.ps1`. No deja clon en disco.
 | Paso | Que hace |
 |---|---|
 | `Requisitos del sistema` | Comprueba SO, arquitectura, PowerShell, winget y PATH. |
-| `Dependencias base` | git, python (con shim `python3`), OpenSSH y pwsh opcional. |
+| `Dependencias base` | git, python (con shim `python3`), OpenSSH y PowerShell 7. |
 | `Fuente (JetBrains Mono Nerd)` | ZIP v3.4.0 a `%LOCALAPPDATA%\Microsoft\Windows\Fonts` + registro HKCU. |
 | `Identidad Git (SSH)` | Claves ed25519, ACLs, perfiles por cuenta y manifiesto JSON. |
 | `Registrar y probar llaves SSH` | Portapapeles, navegador y `ssh -T` con host keys pinnadas. |
 | `Paquetes custom` | fzf, ripgrep, bat, eza, zoxide, fd, lazygit, Neovim y LazyVim. |
 | `Node + gestor de versiones` | fnm (`fnm install --lts`) o Node por winget. |
 | `Actualizar gestor de Node (opcional)` | Actualiza fnm. |
-| `OpenCode` | `npm install -g @opencode/cli`, con ZIP oficial de respaldo. |
+| `OpenCode` | `npm install -g @opencode/cli` (sin ZIP: así `opencode update --method npm` funciona). |
 | `Restaurar configuracion` | Assets publicos a `~/.config/opencode` + `npm install`. |
 | `Windows Terminal (tema)` | Esquema Dracula y fuente Nerd en `settings.json`. |
 | `graphify` | Copia la skill a `~/.config/opencode/skills`. |
@@ -49,7 +49,7 @@ scripts descargados y ejecuta `bootstrap.ps1`. No deja clon en disco.
 | `herdr` | Instalador oficial. |
 | `Wrappers` | `sync-dotfiles.ps1` y `sync-dotfiles.cmd`. |
 | `Verificacion final` | Binarios, versiones, bloques de perfil, PATH y doctor. |
-| `Persistencia de entorno` | `env.ps1`, PATH de usuario y `XDG_CONFIG_HOME`. |
+| `Persistencia de entorno` | `env.ps1`, PATH de usuario, `XDG_CONFIG_HOME` y politica de ejecucion (`RemoteSigned` en `CurrentUser` si estaba en `Restricted`). |
 
 ## Rutas
 
@@ -96,6 +96,21 @@ sola UAC) en lugar de instalar por usuario.
 
 **"No se puede ejecutar la politica de ejecucion".** Usa `install.cmd` o
 `powershell -ExecutionPolicy Bypass -File install.ps1`.
+
+**"No se puede cargar el archivo ...\profile.ps1 porque la ejecucion de scripts
+esta deshabilitada".** El paso `Persistencia de entorno` escribe el perfil, pero
+Windows trae la politica `Restricted` y el host rechaza el archivo: el prompt y el
+PATH de `env.ps1` no cargan. Relanza `-Only "Persistencia de entorno"` (deja
+`RemoteSigned` en `CurrentUser`, sin admin) o ejecuta a mano:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+La politica se lee al arrancar cada shell, asi que aplica tambien a las terminales
+que abre herdr: hay que abrir una pestana nueva (las abiertas conservan el shell
+donde fallo el perfil). Si `Get-ExecutionPolicy -List` muestra `MachinePolicy` o
+`UserPolicy`, la fija una GPO y `CurrentUser` no manda.
 
 **SmartScreen avisa de `nui.exe`.** El binario no esta firmado.
 `Unblock-File "$HOME\.config\enviroment-dotfiles\bin\nui.exe"`. El checksum esta

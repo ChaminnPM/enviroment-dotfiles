@@ -175,6 +175,8 @@ jobs:
                   if fb:
                       assert fb['url'].startswith('https://'), fb['url']
                       assert fb.get('name'), f"{e.get('key')}: fallback sin name"
+                      # Un ZIP suelto no lo reconoce el updater del propio paquete.
+                      assert e.get('method') != 'npm', f"{e.get('key')}: npm con fallback rompe su update"
           print('config/windows/packages.json: OK')
           EOF
 

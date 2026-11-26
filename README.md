@@ -36,8 +36,7 @@ el SO.
 ## Que instala
 
 - **Dependencias base**: git, curl, python3, tar, gzip, rsync, openssh-client y
-  compilador C en Linux/WSL; git, python, OpenSSH y PowerShell 7 opcional en
-  Windows.
+  compilador C en Linux/WSL; git, python, OpenSSH y PowerShell 7 en Windows.
 - **CLI**: fzf, ripgrep, bat, eza, zoxide, fd y lazygit.
 - **Neovim** (> 0.11.2) con LazyVim.
 - **Node** con nvm (Linux/WSL) o fnm (Windows), y **OpenCode**
@@ -73,7 +72,6 @@ Los mismos modificadores en las dos capas, con la sintaxis de cada shell:
 | Omite la identidad Git/SSH | `--skip-git` | `-SkipGit` |
 | Instala los paquetes en ambito de maquina (una sola UAC) | — | `-MachineScope` |
 | Usa Node de winget en lugar de fnm | — | `-NodeManager node` |
-| Instala PowerShell 7 | — | `-WithPowerShell7` |
 | Rama o tag del repo | `REPO_REF=<ref>` | `-Ref <ref>` |
 
 Con `irm | iex` no se pueden pasar banderas: usa las variables de entorno

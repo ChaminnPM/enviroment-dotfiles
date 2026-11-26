@@ -45,8 +45,7 @@
       "command": "pwsh",
       "id": "Microsoft.PowerShell",
       "scope": "user",
-      "optional": true,
-      "note": "El instalador funciona en 5.1; PowerShell 7 se instala si se pide -WithPowerShell7."
+      "note": "El instalador arranca en 5.1, pero deja PowerShell 7: herdr y OpenCode abren pwsh, y los perfiles nuevos usan Documents\\PowerShell."
     }
   ],
   "custom": [
@@ -173,11 +172,7 @@
       "command": "opencode",
       "method": "npm",
       "package": "@opencode/cli",
-      "fallback": {
-        "name": "opencode",
-        "url": "https://opencode.ai/update/api/latest/cli/opencode/opencode-windows-x64.zip",
-        "env": "OPENCODE_FALLBACK_URL"
-      }
+      "note": "Solo npm: el ZIP suelto no lo detecta 'opencode update' y obliga a pasarle --method."
     },
     {
       "key": "herdr",

@@ -30,7 +30,6 @@ param(
     [switch]$NoColor,
     [switch]$SkipGit,
     [switch]$MachineScope,
-    [switch]$WithPowerShell7,
     # -Plain fuerza el runner de texto (sin panel). Es la salida de emergencia
     # cuando la consola no soporta la TUI: imprime todo y no pierde errores.
     [switch]$Plain,
@@ -92,7 +91,6 @@ $env:DOTFILES_PLATFORM = $Platform
 $env:DOTFILES_MACHINE_SCOPE = if ($MachineScope) { '1' } else { '0' }
 $env:DOTFILES_NODE_MANAGER = $NodeManager
 $env:DOTFILES_SKIP_GIT = if ($SkipGit) { '1' } else { '0' }
-$env:DOTFILES_WITH_PS7 = if ($WithPowerShell7) { '1' } else { '0' }
 $env:NUI_STEP_RESULT = $null
 
 Initialize-DotfilesUi -Paths $Paths
@@ -142,7 +140,6 @@ foreach ($pkg in Get-DotfilesPackageList -Section 'base') {
     if (-not $pkg) { continue }
     if ($pkg['scope'] -eq 'system') { continue }
     if (Test-DotfilesPackageInstalled -Package $pkg) { continue }
-    if ($pkg['optional'] -and -not $WithPowerShell7) { continue }
     $baseMissing += $pkg
 }
 $env:DOTFILES_BASE_MISSING = ($baseMissing | ForEach-Object { $_['key'] }) -join ';'
@@ -190,7 +187,7 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Requisitos del sistema' -Es
         Write-UiWarn 'machine-scope sin sesion elevada: los paquetes que requieran admin se intentaran por usuario'
     }
     if ($PSVersionTable.PSVersion.Major -lt 7) {
-        Write-UiDim 'PowerShell 5.1 detectado: funciona, pero se recomienda PowerShell 7 (-WithPowerShell7)'
+        Write-UiDim 'PowerShell 5.1 detectado: Dependencias base instala PowerShell 7 (herdr y OpenCode abren pwsh)'
     }
     $missing = @()
     foreach ($c in 'curl.exe', 'tar.exe') {
@@ -213,7 +210,6 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Dependencias base' -Estimat
     foreach ($pkg in Get-DotfilesPackageList -Section 'base') {
         if (-not $pkg) { continue }
         if ($pkg['scope'] -eq 'system') { continue }
-        if ($pkg['optional'] -and $env:DOTFILES_WITH_PS7 -ne '1') { continue }
         if (Test-DotfilesPackageInstalled -Package $pkg) {
             # Aunque ya este, hay que dejarla visible: winget pudo instalarla sin
             # crear el shim (ver Find-DotfilesWingetTool).
@@ -596,7 +592,7 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'OpenCode' -Estimate 120 -Bo
             }
         }
     }
-    foreach ($d in @((Get-DotfilesPaths).BinDir, (Join-Path $env:APPDATA 'npm'), (Join-Path $env:LOCALAPPDATA 'Programs\opencode\bin'))) {
+    foreach ($d in @((Get-DotfilesPaths).BinDir, (Join-Path $env:APPDATA 'npm'))) {
         if (Test-Path -LiteralPath $d) { $null = Add-DotfilesEnvPath -Dir $d }
     }
     # Igual que en 'Paquetes custom': npm -g escribe opencode en %APPDATA%\npm
@@ -903,6 +899,20 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Verificacion final' -Option
 # --- 18. persistencia -------------------------------------------------------
 $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Persistencia de entorno' -Estimate 15 -Body {
     $paths = Get-DotfilesPaths
+    # Windows trae Restricted: el perfil existe pero el host lo rechaza
+    # ("la ejecucion de scripts esta deshabilitada") y el PATH de env.ps1 no
+    # carga nunca. RemoteSigned en CurrentUser no pide admin y sigue bloqueando
+    # scripts descargados sin desbloquear.
+    $policy = Get-ExecutionPolicy
+    if ($policy -eq 'Restricted') {
+        try {
+            Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
+            Write-UiStepLog 'politica de ejecucion: Restricted -> RemoteSigned (CurrentUser)'
+        } catch {
+            Write-UiWarn "la politica Restricted bloquea el perfil y no se pudo cambiar: $($_.Exception.Message)"
+            Write-UiDim 'Ejecuta a mano: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned'
+        }
+    }
     $r = Install-DotfilesProfileEnv
     if ($r.failed.Count -gt 0) {
         Write-UiWarn ("no se pudo persistir en: " + ($r.failed -join ', '))
