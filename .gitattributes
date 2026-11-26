@@ -1,0 +1,34 @@
+# Normalizacion de lineas: los scripts de bash SIEMPRE en LF (un CRLF rompe el
+# shebang), los de Windows en CRLF.
+* text=auto
+
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.tmpl  text eol=lf
+
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+*.toml      text eol=lf
+*.toml.tpl  text eol=lf
+*.json      text eol=lf
+*.jsonc     text eol=lf
+*.md        text eol=lf
+*.env       text eol=lf
+known_hosts text eol=lf
+
+# Binarios: nunca los toca git.
+bin/*.gz binary
+*.exe    binary
+*.zip    binary
+*.png    binary
+*.ico    binary
+
+# Assets vendorizados de terceros: las skills generate-tests / security-audit y
+# el ejemplo de service.json llegan con CRLF de sus upstreams. Marcarlos
+# -text evita que este cambio reescriba 60 archivos ajenos; se renormalizarian
+# en un commit aparte si algun dia hace falta.
+config/opencode/skills/** -text
+config/opencode/service.json.example -text

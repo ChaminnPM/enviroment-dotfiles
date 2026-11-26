@@ -21,8 +21,8 @@ if [ -n "${REPO_DIR:-}" ] && [ -f "$REPO_DIR/scripts/lib/dotfiles.sh" ]; then
   . "$REPO_DIR/scripts/lib/dotfiles.sh"
 fi
 
-# Solo Linux y WSL estan soportados. En macOS/Windows se avisa y se aborta
-# antes de tocar nada (ver docs/PLATFORMS.md).
+# Solo Linux y WSL. En macOS/Windows se avisa y se aborta antes de tocar
+# nada: Windows tiene su capa propia (bootstrap.ps1). Ver docs/PLATFORMS.md.
 if command -v dotfiles_platform >/dev/null 2>&1; then
   UI_PLATFORM="$(dotfiles_platform)"
 else

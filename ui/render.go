@@ -26,12 +26,14 @@ var (
 	colYellow = lipgloss.Color(themeYellow)
 )
 
+// isTTY usa x/term en lugar del bit ModeCharDevice: en Windows los manejadores
+// de consola (CONIN$/CONOUT$) no siempre reportan ese bit, y un pipe nunca es
+// terminal.
 func isTTY(f *os.File) bool {
-	fi, err := f.Stat()
-	if err != nil {
+	if f == nil {
 		return false
 	}
-	return fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func termWidth() int {

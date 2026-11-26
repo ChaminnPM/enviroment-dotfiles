@@ -2,8 +2,10 @@
 // Subcomandos compatibles con el subconjunto de gum usado por los scripts,
 // mas step/clear/report para el flujo de instalacion.
 //
-// Solo Linux y WSL: el panel usa grupos de procesos POSIX y /dev/tty.
-// Ver docs/PLATFORMS.md.
+// Multiplataforma: Linux, WSL y Windows nativo. En POSIX el panel aísla cada
+// paso en su propio grupo de procesos; en Windows usa un Job Object con
+// KILL_ON_JOB_CLOSE mas `taskkill /T` como garantia de limpieza.
+// Ver docs/PLATFORMS.md y docs/STEPS.md.
 package main
 
 import (
@@ -11,7 +13,7 @@ import (
 	"os"
 )
 
-var nuiVersion = "0.2.9"
+var nuiVersion = "0.3.0"
 
 func main() {
 	args := stripNoColor(os.Args[1:])

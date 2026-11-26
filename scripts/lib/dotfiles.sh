@@ -7,7 +7,8 @@
 #   - conservar los permisos originales;
 #   - actualizar solo bloques delimitados por marcadores.
 #
-# Soporte: Linux y WSL (bash 4+). macOS/Windows nativo no soportados; ver
+# Soporte: Linux y WSL (bash 4+). En Windows nativo vive la capa PowerShell
+# (bootstrap.ps1 + scripts/lib/*.psm1); macOS no esta soportado. Ver
 # docs/PLATFORMS.md. El helper usa `stat -c` (GNU) con fallback a `stat -f`.
 
 DOTFILES_STATE_DIR="${DOTFILES_STATE_DIR:-$HOME/.local/state/enviroment-dotfiles}"
@@ -49,11 +50,11 @@ dotfiles_assert_supported() {
   case "$(dotfiles_platform)" in
     linux|wsl) return 0 ;;
     darwin)
-      printf 'Este instalador solo soporta Linux y WSL; macOS no esta soportado (ver docs/PLATFORMS.md).\n' >&2
+      printf 'Estos scripts soportan Linux y WSL; macOS no esta soportado (docs/PLATFORMS.md).\n' >&2
       return 1
       ;;
     windows)
-      printf 'Windows nativo no esta soportado. Usa WSL (ver docs/PLATFORMS.md).\n' >&2
+      printf 'Windows nativo usa el instalador PowerShell: install.ps1 (docs/WINDOWS.md).\n' >&2
       return 1
       ;;
     *)

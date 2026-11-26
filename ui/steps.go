@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -40,6 +39,7 @@ import (
 type planStep struct {
 	Title       string      `json:"title"`
 	Cmd         string      `json:"cmd"`
+	Argv        []string    `json:"argv,omitempty"` // forma preferida: argv literal
 	Optional    bool        `json:"optional"`
 	Interactive bool        `json:"interactive"`
 	Estimate    int         `json:"estimate"` // segundos estimados (progreso automático)
@@ -68,9 +68,42 @@ type inputCondition struct {
 }
 
 type plan struct {
-	Title string     `json:"title"`
-	Notes []string   `json:"notes"`
+	Title string   `json:"title"`
+	Notes []string `json:"notes"`
+	// Shell decide como se ejecutan los pasos y en que formato se escriben los
+	// resultados de formulario: "bash" (default, Linux/WSL) o "pwsh" (Windows).
+	Shell string     `json:"shell,omitempty"`
 	Steps []planStep `json:"steps"`
+}
+
+// isPwshReport indica que el plan se ejecuta con PowerShell: los resultados de
+// formulario se escriben como $KEY = 'valor' en result-NN.ps1.
+func (p plan) isPwsh() bool {
+	return strings.EqualFold(p.Shell, "pwsh") || strings.EqualFold(p.Shell, "powershell")
+}
+
+// resultExt es la extension del archivo de resultados segun el interprete.
+func (p plan) resultExt() string {
+	if p.isPwsh() {
+		return "ps1"
+	}
+	return "env"
+}
+
+// stepCommand construye el proceso de un paso.
+//
+// Prioridad: argv literal (plan "argv"). Si no existe, se cae al string "cmd"
+// con el interprete del plan: `bash -c` o `pwsh -Command`. argv evita
+// cualquier reinterpretacion de rutas con espacios o caracteres raros, que en
+// Windows es la norma (C:\Users\John Doe\...).
+func stepCommand(ps planStep, shell string) *exec.Cmd {
+	if len(ps.Argv) > 0 {
+		return exec.Command(ps.Argv[0], ps.Argv[1:]...)
+	}
+	if strings.EqualFold(shell, "pwsh") || strings.EqualFold(shell, "powershell") {
+		return exec.Command(shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps.Cmd)
+	}
+	return exec.Command("bash", "-c", ps.Cmd)
 }
 
 func loadPlan(path string) (plan, error) {
@@ -93,8 +126,18 @@ func loadPlan(path string) (plan, error) {
 	if len(p.Steps) == 0 {
 		return plan{}, errors.New("el plan no tiene pasos")
 	}
+	// El interprete del plan es unico: mezclar bash y pwsh en un mismo plan
+	// dejaria los resultados de formulario inlegibles para el paso.
+	switch strings.ToLower(strings.TrimSpace(p.Shell)) {
+	case "", "bash", "sh":
+		p.Shell = "bash"
+	case "pwsh", "powershell":
+		p.Shell = "pwsh"
+	default:
+		return plan{}, fmt.Errorf("shell no soportada en el plan: %s", p.Shell)
+	}
 	for i := range p.Steps {
-		if strings.TrimSpace(p.Steps[i].Cmd) == "" {
+		if strings.TrimSpace(p.Steps[i].Cmd) == "" && len(p.Steps[i].Argv) == 0 {
 			return plan{}, fmt.Errorf("paso %d sin comando", i+1)
 		}
 		if p.Steps[i].Title == "" {
@@ -291,33 +334,12 @@ func (r *runner) kill() {
 	}
 }
 
-// killGroup pide al grupo del proceso que termine y, si sigue vivo tras un
-// margen, lo mata. Sin la escalada, `apt-get`/`npm` pueden quedar huérfanos
-// reteniendo el lock del gestor de paquetes.
-func killGroup(c *exec.Cmd) {
-	if c.Process == nil {
-		return
-	}
-	pgid := c.Process.Pid
-	if g, err := syscall.Getpgid(c.Process.Pid); err == nil && g > 0 {
-		pgid = g
-	}
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	_ = syscall.Kill(-pgid, syscall.SIGCONT)
-	go func(pgid int) {
-		time.Sleep(3 * time.Second)
-		// Solo si el grupo sigue existiendo (evita matar un pgid reutilizado).
-		if err := syscall.Kill(-pgid, 0); err == nil {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		}
-	}(pgid)
-}
-
 // runCmd arranca c y lo mata (con escalada) si ctx se cancela.
 func runCmd(ctx context.Context, c *exec.Cmd) error {
 	if err := c.Start(); err != nil {
 		return err
 	}
+	attachProc(c)
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -914,7 +936,7 @@ func (m stepsModel) finishForm(idx int) (tea.Model, tea.Cmd) {
 	m.writeResults(idx, m.resultsContent(idx))
 	ps := m.plan.Steps[idx]
 	if ps.Interactive {
-		c := exec.Command("bash", "-c", ps.Cmd)
+		c := stepCommand(ps, m.plan.Shell)
 		c.Env = m.stepEnv(idx, "TERM=xterm-256color")
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return stepDoneMsg{idx: idx, err: err}
@@ -960,7 +982,7 @@ func (m stepsModel) resultsContent(idx int) string {
 		if !shown[in.Name] {
 			val = "" // campo oculto: no debe heredar valores del entorno
 		}
-		b.WriteString(in.Name + "=" + shellQuote(val) + "\n")
+		b.WriteString(resultLine(in.Name, val, m.plan.resultExt()) + "\n")
 	}
 	return b.String()
 }
@@ -971,7 +993,7 @@ func (m stepsModel) writeResults(idx int, content string) {
 		return
 	}
 	_ = os.MkdirAll(m.stateDir, 0o700)
-	_ = os.WriteFile(filepath.Join(m.stateDir, fmt.Sprintf("result-%02d.env", idx+1)),
+	_ = os.WriteFile(resultPath(m.stateDir, idx+1, m.plan.resultExt()),
 		[]byte(content), 0o600)
 }
 
@@ -979,11 +1001,33 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// psQuote escapa un valor para un literal single-quoted de PowerShell
+// (duplicando comillas simples).
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// resultPath es la ruta del archivo de resultados del paso n.
+func resultPath(dir string, n int, ext string) string {
+	return filepath.Join(dir, fmt.Sprintf("result-%02d.%s", n, ext))
+}
+
+// resultLine serializa un campo del formulario para el interprete del plan:
+//
+//	bash -> KEY='valor'      (se sourcea con `. $NUI_STEP_RESULT`)
+//	pwsh -> $KEY = 'valor'   (se sourcea con `. $env:NUI_STEP_RESULT`)
+func resultLine(name, value, ext string) string {
+	if ext == "ps1" {
+		return "$" + name + " = " + psQuote(value)
+	}
+	return name + "=" + shellQuote(value)
+}
+
 func (m stepsModel) stepEnv(idx int, extra ...string) []string {
 	env := append(os.Environ(), "TERM=dumb", "NO_COLOR=1", "CLICOLOR=0")
 	if m.stateDir != "" {
 		env = append(env, "NUI_STATE_DIR="+m.stateDir,
-			fmt.Sprintf("NUI_STEP_RESULT=%s", filepath.Join(m.stateDir, fmt.Sprintf("result-%02d.env", idx+1))))
+			"NUI_STEP_RESULT="+resultPath(m.stateDir, idx+1, m.plan.resultExt()))
 	}
 	return append(env, extra...)
 }
@@ -1008,7 +1052,7 @@ func (m stepsModel) begin(idx int) (tea.Model, tea.Cmd) {
 		return m.startForm(idx)
 	}
 	if ps.Interactive {
-		c := exec.Command("bash", "-c", ps.Cmd)
+		c := stepCommand(ps, m.plan.Shell)
 		c.Env = m.stepEnv(idx, "TERM=xterm-256color")
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return stepDoneMsg{idx: idx, err: err}
@@ -1043,9 +1087,9 @@ func (m stepsModel) execStep(idx int) tea.Cmd {
 			}
 		}()
 
-		c := exec.Command("bash", "-c", ps.Cmd)
+		c := stepCommand(ps, m.plan.Shell)
 		c.Env = env
-		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		setProcAttr(c)
 
 		pr, pw := io.Pipe()
 		c.Stdout = pw
@@ -1071,6 +1115,9 @@ func (m stepsModel) execStep(idx int) tea.Cmd {
 			run.clear()
 			return stepDoneMsg{idx: idx, err: err}
 		}
+		// El enlace al Job Object va antes de publicar el comando: si el panel
+		// ya estaba cancelado, setCmd mata un proceso que Windows ya controla.
+		attachProc(c)
 		run.setCmd(c)
 
 		err = c.Wait()
@@ -1969,11 +2016,12 @@ func cmdSteps(args []string) int {
 	defer os.RemoveAll(stateDir)
 
 	if plain || nonInteractive || !tty || w < 64 || h < 14 {
-		return runPlanPlain(p, logDir, stateDir)
+		return runPlanPlain(p, logDir, stateDir, nonInteractive)
 	}
 
-	// SIGTERM/SIGHUP (kill, cierre de terminal) cancelan los pasos hijos.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	// Senales externas que cancelan los pasos hijos (POSIX; vacio en Windows).
+	ctx, stop := signal.NotifyContext(context.Background(),
+		append([]os.Signal{os.Interrupt}, extraSignals...)...)
 	defer stop()
 
 	stepsProgram.Store(nil)
@@ -2020,16 +2068,17 @@ func defaultLogDir() string {
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".local/state/enviroment-dotfiles/logs")
+	return filepath.Join(home, platformLogSubdir())
 }
 
 // runPlanPlain ejecuta el plan sin TUI (verbose, CI o terminal pequeña).
-func runPlanPlain(p plan, logDir, stateDir string) int {
+func runPlanPlain(p plan, logDir, stateDir string, nonInteractive bool) int {
 	oks, warns, errs := []string{}, []string{}, []string{}
 	start := time.Now()
 
-	// Ctrl+C / SIGTERM matan el grupo del paso actual (no deja apt/npm vivos).
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Ctrl+C (y SIGTERM en POSIX) matan el grupo del paso actual.
+	ctx, stop := signal.NotifyContext(context.Background(),
+		append([]os.Signal{os.Interrupt}, extraSignals...)...)
 	defer stop()
 
 	clearScreen()
@@ -2038,16 +2087,16 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 	inputReader := bufio.NewReader(os.Stdin)
 	for i, ps := range p.Steps {
 		fmt.Printf("\n\033[1m== [%d/%d] %s ==\033[0m\n", i+1, len(p.Steps), ps.Title)
-		promptInputs(stateDir, i, ps.Inputs, inputReader)
+		promptInputs(stateDir, i, ps.Inputs, inputReader, p.resultExt(), nonInteractive)
 
-		c := exec.Command("bash", "-c", ps.Cmd)
+		c := stepCommand(ps, p.Shell)
 		env := append(os.Environ(), "TERM=dumb", "NUI_PLAIN=1")
 		if stateDir != "" {
 			env = append(env, "NUI_STATE_DIR="+stateDir,
-				fmt.Sprintf("NUI_STEP_RESULT=%s", filepath.Join(stateDir, fmt.Sprintf("result-%02d.env", i+1))))
+				fmt.Sprintf("NUI_STEP_RESULT=%s", resultPath(stateDir, i+1, p.resultExt())))
 		}
 		c.Env = env
-		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		setProcAttr(c)
 
 		warned := false
 		var err error
@@ -2129,11 +2178,16 @@ func runPlanPlain(p plan, logDir, stateDir string) int {
 	return 0
 }
 
-// promptInputs pide los campos del paso por stdin y escribe result-<N>.env.
-func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader) {
+// promptInputs pide los campos del paso por stdin y escribe el resultado.
+func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader, ext string, nonInteractive bool) {
 	if len(inputs) == 0 || stateDir == "" {
 		return
 	}
+	// Silent = bandera --non-interactive de nui o NUI_NONINTERACTIVE=1 (lo
+	// exporta ui.sh y bootstrap.ps1): se quedan los defaults sin preguntar y
+	// sin leer stdin, que en `curl | bash` esta a EOF igualmente. Sin esto el
+	// modo texto imprime todos los prompts y cuelga esperando entrada.
+	silent := nonInteractive || os.Getenv("NUI_NONINTERACTIVE") == "1"
 	_ = os.MkdirAll(stateDir, 0o700)
 	vals := map[string]string{}
 	var b strings.Builder
@@ -2141,10 +2195,20 @@ func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader
 		if !inputVisible(in, vals) {
 			// Campo oculto: se guarda vacío para no heredar valores del entorno.
 			vals[in.Name] = ""
-			b.WriteString(in.Name + "=" + shellQuote("") + "\n")
+			b.WriteString(resultLine(in.Name, "", ext) + "\n")
 			continue
 		}
 		val := in.Default
+		if silent {
+			// Solo se normaliza el default de los selects (el resto de tipos ya
+			// trae su default en la forma correcta).
+			if in.Type == "select" {
+				val = strings.Join(strings.Fields(in.Default), "\n")
+			}
+			vals[in.Name] = val
+			b.WriteString(resultLine(in.Name, val, ext) + "\n")
+			continue
+		}
 		switch in.Type {
 		case "input", "password":
 			fmt.Printf("\n%s", in.Prompt)
@@ -2212,10 +2276,9 @@ func promptInputs(stateDir string, idx int, inputs []planInput, rd *bufio.Reader
 			val = strings.Join(picked, "\n")
 		}
 		vals[in.Name] = val
-		b.WriteString(in.Name + "=" + shellQuote(val) + "\n")
+		b.WriteString(resultLine(in.Name, val, ext) + "\n")
 	}
-	_ = os.WriteFile(filepath.Join(stateDir, fmt.Sprintf("result-%02d.env", idx+1)),
-		[]byte(b.String()), 0o600)
+	_ = os.WriteFile(resultPath(stateDir, idx+1, ext), []byte(b.String()), 0o600)
 }
 
 func defaultYesNo(v string) string {

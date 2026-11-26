@@ -1,0 +1,209 @@
+{
+  "_comment": [
+    "Manifiesto de paquetes para Windows nativo (docs/WINDOWS.md).",
+    "winget es el gestor principal; `fallback` es un ZIP pinnado que funciona",
+    "sin winget y sin admin. Cada URL de fallback verificada con HEAD el",
+    "2026-11-25. `env` indica la variable que permite sobrescribir la URL.",
+    "Sin fallback y sin winget el paso degrada a aviso, nunca a error fatal."
+  ],
+  "base": [
+    {
+      "key": "git",
+      "command": "git",
+      "id": "Git.Git",
+      "scope": "user",
+      "fallback": {
+        "name": "git",
+        "url": "https://github.com/git-for-windows/git/releases/download/v2.52.0.windows.2/MinGit-2.52.0.2-64-bit.zip",
+        "inner": "cmd/git.exe",
+        "env": "GIT_FALLBACK_URL"
+      },
+      "note": "MinGit no trae ssh: la identidad Git usa el OpenSSH del sistema."
+    },
+    {
+      "key": "curl",
+      "command": "curl",
+      "scope": "system",
+      "note": "curl.exe y tar.exe vienen con Windows 10 1803+."
+    },
+    {
+      "key": "python",
+      "command": "python",
+      "id": "Python.Python.3.13",
+      "scope": "user",
+      "shim": "python3",
+      "note": "graphify y los validadores de skills esperan `python3`: se crea un shim en ~/.config/enviroment-dotfiles/bin."
+    },
+    {
+      "key": "ssh",
+      "command": "ssh",
+      "scope": "system",
+      "note": "OpenSSH Client es caracteristica del SO (Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0, requiere admin)."
+    },
+    {
+      "key": "pwsh",
+      "command": "pwsh",
+      "id": "Microsoft.PowerShell",
+      "scope": "user",
+      "optional": true,
+      "note": "El instalador funciona en 5.1; PowerShell 7 se instala si se pide -WithPowerShell7."
+    }
+  ],
+  "custom": [
+    {
+      "key": "fzf",
+      "command": "fzf",
+      "id": "junegunn.fzf",
+      "scope": "user",
+      "fallback": {
+        "name": "fzf",
+        "url": "https://github.com/junegunn/fzf/releases/download/v0.65.0/fzf-0.65.0-windows_amd64.zip",
+        "env": "FZF_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "ripgrep",
+      "command": "rg",
+      "id": "BurntSushi.ripgrep.MSVC",
+      "scope": "user",
+      "fallback": {
+        "name": "rg",
+        "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-pc-windows-msvc.zip",
+        "inner": "ripgrep-14.1.1-x86_64-pc-windows-msvc/rg.exe",
+        "env": "RIPGREP_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "bat",
+      "command": "bat",
+      "id": "sharkdp.bat",
+      "scope": "user",
+      "fallback": {
+        "name": "bat",
+        "url": "https://github.com/sharkdp/bat/releases/download/v0.25.0/bat-v0.25.0-x86_64-pc-windows-msvc.zip",
+        "inner": "bat-v0.25.0-x86_64-pc-windows-msvc/bat.exe",
+        "env": "BAT_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "eza",
+      "command": "eza",
+      "id": "eza-community.eza",
+      "scope": "user",
+      "optional": true,
+      "note": "eza no publica binarios Windows oficiales: si winget no lo tiene, se avisa y se omite."
+    },
+    {
+      "key": "zoxide",
+      "command": "zoxide",
+      "id": "ajeetdsouza.zoxide",
+      "scope": "user",
+      "fallback": {
+        "name": "zoxide",
+        "url": "https://github.com/ajeetdsouza/zoxide/releases/download/v0.9.8/zoxide-0.9.8-x86_64-pc-windows-msvc.zip",
+        "env": "ZOXIDE_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "fd-find",
+      "command": "fd",
+      "id": "sharkdp.fd",
+      "scope": "user",
+      "fallback": {
+        "name": "fd",
+        "url": "https://github.com/sharkdp/fd/releases/download/v10.2.0/fd-v10.2.0-x86_64-pc-windows-msvc.zip",
+        "inner": "fd-v10.2.0-x86_64-pc-windows-msvc/fd.exe",
+        "env": "FD_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "lazygit",
+      "command": "lazygit",
+      "id": "JesseDuffield.lazygit",
+      "scope": "user",
+      "fallback": {
+        "name": "lazygit",
+        "url": "https://github.com/jesseduffield/lazygit/releases/download/v0.55.0/lazygit_0.55.0_Windows_x86_64.zip",
+        "env": "LAZYGIT_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "neovim",
+      "command": "nvim",
+      "id": "Neovim.Neovim",
+      "scope": "user",
+      "minVersion": "0.11.2",
+      "fallback": {
+        "name": "nvim",
+        "url": "https://github.com/neovim/neovim/releases/download/v0.11.4/nvim-win64.zip",
+        "inner": "nvim-win64/bin/nvim.exe",
+        "env": "NEOVIM_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "lazyvim",
+      "command": "nvim",
+      "scope": "config",
+      "note": "LazyVim no es un paquete: clona el starter en ~/.config/nvim (requiere neovim)."
+    }
+  ],
+  "apps": [
+    {
+      "key": "node",
+      "command": "node",
+      "method": "winget",
+      "id": "OpenJS.NodeJS.LTS",
+      "scope": "user",
+      "note": "Se prefiere fnm (version por proyecto) cuando se usa -NodeManager fnm."
+    },
+    {
+      "key": "fnm",
+      "command": "fnm",
+      "method": "winget",
+      "id": "Schniz.fnm",
+      "scope": "user",
+      "fallback": {
+        "name": "fnm",
+        "url": "https://github.com/Schniz/fnm/releases/download/v1.38.1/fnm-windows.zip",
+        "env": "FNM_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "opencode",
+      "command": "opencode",
+      "method": "npm",
+      "package": "@opencode/cli",
+      "fallback": {
+        "name": "opencode",
+        "url": "https://opencode.ai/update/api/latest/cli/opencode/opencode-windows-x64.zip",
+        "env": "OPENCODE_FALLBACK_URL"
+      }
+    },
+    {
+      "key": "herdr",
+      "command": "herdr",
+      "method": "script",
+      "url": "https://herdr.dev/install.ps1",
+      "note": "Instalador oficial de herdr para Windows: baja el ZIP, verifica SHA-256 y ajusta el PATH de usuario."
+    },
+    {
+      "key": "oh-my-posh",
+      "command": "oh-my-posh",
+      "method": "winget",
+      "id": "JanDeDobbeleer.OhMyPosh",
+      "scope": "user",
+      "fallback": {
+        "name": "oh-my-posh",
+        "url": "https://github.com/JanDeDobbeleer/oh-my-posh/releases/download/v33.4.0/posh-windows-amd64.exe",
+        "inner": "",
+        "env": "OHMYPOSH_FALLBACK_URL"
+      },
+      "theme": {
+        "name": "dracula",
+        "url": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/v33.4.0/themes/dracula.omp.json",
+        "env": "POSH_THEME_URL"
+      },
+      "note": "Reemplazo de oh-my-bash en Windows; el tema se fija con config/oh-my-posh/dracula.json."
+    }
+  ]
+}

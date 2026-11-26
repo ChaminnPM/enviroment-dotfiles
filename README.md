@@ -1,9 +1,15 @@
 # enviroment-dotfiles (publico)
 
-Configuracion portable de OpenCode para **Linux y WSL**. Funciona con
-`apt-get` (Debian/Ubuntu), `dnf` (Fedora/RHEL), `pacman` (Arch), `zypper`
-(openSUSE) y `apk` (Alpine). macOS y Windows nativo **no estan soportados**:
-ver [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
+Configuracion portable de OpenCode con instalador automatico para **Linux, WSL
+y Windows nativo**. En Linux/WSL funciona con `apt-get` (Debian/Ubuntu), `dnf`
+(Fedora/RHEL), `pacman` (Arch), `zypper` (openSUSE) y `apk` (Alpine); en
+Windows nativo usa **winget** con ZIPs pinnados de respaldo, sin WSL y sin Git
+Bash. macOS **no esta soportado**: ver [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
+
+Hay **dos capas de runner sobre los mismos datos**: `bootstrap.sh` +
+`scripts/lib/*.sh` para Linux/WSL y `bootstrap.ps1` + `scripts/lib/*.psm1` para
+Windows. `nui` (Go) es comun a las dos. El contrato que las mantiene
+sincronizadas esta en [`docs/STEPS.md`](docs/STEPS.md).
 
 Incluye un tema canonico (**Dracula + JetBrainsMono Nerd Font**) que se aplica
 a todas las herramientas durante la instalacion, incluida la instalacion de
@@ -11,11 +17,22 @@ la fuente.
 
 ## Instalacion
 
-En Linux o WSL, ejecuta:
+### Linux o WSL
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.sh | bash
 ```
+
+### Windows nativo (10 22H2+ / 11, x64)
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install.ps1 | iex"
+```
+
+Sin WSL y sin Git Bash. Por defecto **no pide admin**: winget en `--scope user`
+y ZIPs portatiles pinnados. Guia completa (requisitos, rutas, paquetes,
+troubleshooting): [`docs/WINDOWS.md`](docs/WINDOWS.md). Si el one-liner falla
+por politica de ejecucion o proxy, usa `install.cmd`.
 
 El instalador descarga el repo como **tarball** y no requiere `git` para empezar. Luego `bootstrap.sh` instala dependencias base (`git`, `curl`, `python3`, `tar`, `gzip`, `rsync`, `openssh-client`, etc.) antes de los pasos que las necesitan.
 
@@ -24,6 +41,10 @@ Para el repo privado (`enviroment-dotfiles-secrets`) usa el launcher público, q
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ChaminnPM/enviroment-dotfiles/main/install-private.sh | bash
 ```
+
+En Windows el instalador baja el repo como **ZIP** y `bootstrap.ps1` equivale
+paso a paso a `bootstrap.sh` (18 pasos, mismos titulos; el de terminal pasa de
+`Alacritty` a `Windows Terminal (tema)`).
 
 El instalador fija las host keys de GitHub/Bitbucket en
 `~/.ssh/known_hosts` desde `config/ssh/known_hosts` (sin `ssh-keyscan`). El
@@ -86,6 +107,26 @@ deja fuera de la sesión.
    - Aplica Alacritty y, al final, el **tema** a todas las herramientas presentes.
    - Instala el wrapper publico `sync-dotfiles` y ejecuta una **verificación final** (`opencode`, `herdr`, `node`, `npm`, `nvim` y `sync-dotfiles doctor`).
 5. Elimina el directorio temporal del repo: no queda `~/enviroment-dotfiles` instalado localmente.
+
+### Equivalente en Windows nativo
+
+`install.ps1` -> ZIP al temporal -> `bootstrap.ps1` -> 18 pasos con el mismo
+contrato (`shell: "pwsh"`, `argv` literal, mismas directivas `##log`/`##warn`/
+`##progress`/`##confirm`). Los paralelismos y las diferencias:
+
+| Linux/WSL | Windows nativo |
+|---|---|
+| `sudo` + apt/dnf/pacman/zypper/apk | winget `--scope user` + ZIPs pinnados (sin admin; `-MachineScope` eleva en bloque) |
+| `~/.bashrc`, `~/.profile`, `~/.bash_profile` | `$PROFILE` de PowerShell 7 y de 5.1 + `~/.config/enviroment-dotfiles/env.ps1` |
+| nvm | fnm (`-NodeManager node` para Node directo) |
+| oh-my-bash | oh-my-posh con `dracula.omp.json` vendorizado |
+| `~/.config/alacritty` | Windows Terminal (`settings.json`, esquema Dracula + fuente Nerd) |
+| fontconfig (`fc-match`) | carpeta de fuentes de usuario + registro HKCU |
+| `chmod`/`rsync`/`less` | `icacls`/`Copy-Item`+`robocopy`/`bat` o `more.com` |
+| `~/.local/state/enviroment-dotfiles` | `~/.config/enviroment-dotfiles/{logs,state,backups}` |
+
+Ver [`docs/WINDOWS.md`](docs/WINDOWS.md) para requisitos, paquetes y
+troubleshooting, y [`docs/STEPS.md`](docs/STEPS.md) para el contrato compartido.
 
 ### Opciones del instalador
 ```bash
@@ -325,11 +366,24 @@ bash scripts/sync.sh push
 ```
 
 ## Requiere
+
+### Linux o WSL
 - Linux o WSL (ver [`docs/PLATFORMS.md`](docs/PLATFORMS.md)).
 - Base: `git`, `curl`, `bash`, `python3`, `node` (nvm), `npm`, `rsync`, `openssh-client`, `tar`, `gzip` (instalados por `bootstrap.sh` si faltan, con `apt-get`/`dnf`/`pacman`/`zypper`/`apk`). `xdg-utils`, `wl-clipboard` y `xclip` solo con sesion grafica.
 - Tema: `fontconfig` (`fc-match`/`fc-cache`) para verificar e instalar JetBrainsMono Nerd Font; si no esta, los TTFs se copian igual y el paso avisa.
 - `nui`: binario estatico propio (bubbletea + lipgloss) que se instala automaticamente desde `bin/nui-<os>-<arch>.gz` (o `NUI_BASE_URL`).
 - `herdr` y `oh-my-bash`: se instalan automaticamente.
+
+### Windows nativo
+- Windows 10 22H2 o Windows 11, x64 (ARM64 best-effort). PowerShell 5.1 minimo,
+  PowerShell 7 recomendado; Windows Terminal como terminal objetivo.
+- Base: `git`, `python`, OpenSSH Client (`ssh`/`ssh-keygen`), `curl.exe` y
+  `tar.exe` (estos dos vienen con el SO). `bootstrap.ps1` instala lo que falte
+  con winget o con los ZIPs de `config/windows/packages.json`.
+- No hace falta administrador ni WSL ni Git Bash.
+- `nui`: mismo binario Go, publicado como `bin/nui-windows-<arch>.exe.gz` y
+  verificado contra `bin/SHA256SUMS`.
+- `herdr`, `oh-my-posh`, OpenCode y Neovim: se instalan automaticamente.
 
 ## Comportamiento visual
 - La UI usa `nui steps run` (binario propio en Go con bubbletea/lipgloss; fuente en `ui/`, binarios en `bin/`): un panel de dos columnas con el listado de pasos (`[✓]`/`[!]`/`[✗]`) y el detalle del paso activo (progreso, contador `paso N de M` y logs). Si `nui` no esta disponible, hay fallback textual/ANSI.
@@ -363,6 +417,15 @@ VERBOSE=1 bash bootstrap.sh
 bash bootstrap.sh --verbose
 sync-dotfiles pull --verbose
 sync-dotfiles push --verbose
+```
+
+En Windows los logs van a `~/.config/enviroment-dotfiles/logs` y el equivalente
+es:
+```powershell
+pwsh -File bootstrap.ps1 -Verbose
+pwsh -File bootstrap.ps1 -DryRun          # solo el plan, sin ejecutar nada
+sync-dotfiles pull -Verbose
+pwsh -File scripts/sync.ps1 -Mode doctor
 ```
 
 El one-liner inicial usa un fallback silencioso antes de tener `nui`; cuando `nui` ya esta disponible muestra banners, spinners, prompts y reporte final.

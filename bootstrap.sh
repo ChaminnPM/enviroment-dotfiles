@@ -35,7 +35,7 @@ Uso: bootstrap.sh [opciones]
   --only <texto>       ejecuta solo los pasos cuyo titulo contenga <texto>
   -h, --help           esta ayuda
 
-Solo Linux y WSL estan soportados. Ver docs/PLATFORMS.md.
+Solo Linux y WSL. En Windows nativo existe bootstrap.ps1 (docs/WINDOWS.md).
 HELP
       exit 0
       ;;

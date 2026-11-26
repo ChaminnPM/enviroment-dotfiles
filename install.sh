@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # install.sh - instalador one-liner para Linux y WSL.
-# macOS y Windows nativo no estan soportados (ver docs/PLATFORMS.md).
+# Windows nativo tiene su propio instalador (install.ps1); macOS no esta
+# soportado. Ver docs/PLATFORMS.md.
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
@@ -20,7 +21,8 @@ case "$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')" in
     exit 1
     ;;
   mingw*|msys*|cygwin*)
-    printf '[ERROR] Windows nativo no esta soportado. Usa WSL. Ver docs/PLATFORMS.md.\n' >&2
+    printf '[ERROR] Estos scripts son de Linux/WSL. En Windows nativo usa install.ps1.\n' >&2
+    printf '        powershell -ExecutionPolicy Bypass -File install.ps1   (ver docs/WINDOWS.md)\n' >&2
     exit 1
     ;;
   *)
@@ -57,7 +59,8 @@ Uso: install.sh [opciones]
 Variables: REPO_REF (rama/tag, default main; solo [A-Za-z0-9._-]),
 NUI_BASE_URL, NUI_VERSION.
 
-Solo Linux y WSL. macOS/Windows: ver docs/PLATFORMS.md.
+Solo Linux y WSL. En Windows nativo: install.ps1 (docs/WINDOWS.md).
+macOS: no soportado (docs/PLATFORMS.md).
 HELP
       exit 0
       ;;

@@ -5,7 +5,8 @@
 # asi que este launcher (que SI es publico) verifica git/SSH, clona el repo
 # privado por SSH en un temporal y ejecuta su install.sh. No deja el clon.
 #
-# Solo Linux y WSL (ver docs/PLATFORMS.md).
+# Solo Linux y WSL (en Windows nativo hara falta install-private.ps1; ver
+# docs/PLATFORMS.md).
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"

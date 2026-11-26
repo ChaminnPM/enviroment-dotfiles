@@ -17,13 +17,13 @@ import (
 )
 
 // tuiIO resuelve entrada/salida interactiva.
-// - entrada: stdin si es TTY, si no /dev/tty (se cierra con closer)
+// - entrada: stdin si es TTY, si no la consola real (/dev/tty o CONIN$)
 // - salida: stderr si es TTY (stdout se reserva para resultados), si no stdout
 func tuiIO() (in *os.File, out *os.File, ok bool, closer func()) {
 	closer = func() {}
 	if isTTY(os.Stdin) {
 		in = os.Stdin
-	} else if f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+	} else if f, err := openConsoleInput(); err == nil {
 		in = f
 		closer = func() { _ = f.Close() }
 	} else {
@@ -34,8 +34,12 @@ func tuiIO() (in *os.File, out *os.File, ok bool, closer func()) {
 	} else if isTTY(os.Stdout) {
 		out = os.Stdout
 	} else {
-		return nil, nil, false, closer
+		closer()
+		return nil, nil, false, func() {}
 	}
+	// En Windows los escapes ANSI solo funcionan si la consola tiene VT
+	// activo; en el resto de plataformas es un no-op.
+	enableVirtualTerminal(out)
 	return in, out, true, closer
 }
 
@@ -546,12 +550,8 @@ func cmdChoose(args []string) {
 // ---------------------------------------------------------------- pager
 
 func cmdPager(args []string) error {
-	if _, err := exec.LookPath("less"); err == nil && isTTY(os.Stdout) {
-		c := exec.Command("less", append([]string{"-R"}, args...)...)
-		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-		if err := c.Run(); err == nil {
-			return nil
-		}
+	if isTTY(os.Stdout) && runPager(args) {
+		return nil
 	}
 	if len(args) == 0 {
 		_, err := io.Copy(os.Stdout, os.Stdin)

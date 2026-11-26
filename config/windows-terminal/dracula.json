@@ -1,0 +1,31 @@
+{
+  "$comment": [
+    "Esquema Dracula para Windows Terminal.",
+    "Set-DotfilesWindowsTerminalTheme (scripts/lib/theme.psm1) lo inserta en",
+    "settings.json cuando se puede analizar el JSONC; si no, aplica este",
+    "fragmento manualmente en la seccion \"schemes\" y despues:",
+    "  profiles.defaults.colorScheme = \"Dracula\"",
+    "  profiles.defaults.font = { face = \"JetBrainsMono Nerd Font\", size = 10 }",
+    "Fuente de verdad de los colores: config/theme/dracula.env."
+  ],
+  "name": "Dracula",
+  "background": "#282a36",
+  "foreground": "#f8f8f2",
+  "selectionBackground": "#44475a",
+  "cursorColor": "#f8f8f2",
+  "cursorText": "#282a36",
+  "black": "#21222c",
+  "red": "#ff5555",
+  "green": "#50fa7b",
+  "yellow": "#f1fa8c",
+  "purple": "#bd93f9",
+  "cyan": "#8be9fd",
+  "white": "#f8f8f2",
+  "brightBlack": "#6272a4",
+  "brightRed": "#ff6e6e",
+  "brightGreen": "#69ff94",
+  "brightYellow": "#ffffa5",
+  "brightPurple": "#ff92df",
+  "brightCyan": "#a4ffff",
+  "brightWhite": "#ffffff"
+}

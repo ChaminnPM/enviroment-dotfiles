@@ -101,6 +101,13 @@ sync_path() {
     return 0
   fi
   mkdir -p "$(dirname "$dst")"
+  # Con `rsync -a src dst`, si dst ya EXISTE el resultado es dst/src_basename
+  # (doble theme/theme tras el segundo pull). Para directorios se fuerza la
+  # barra final: "copia el contenido de src en dst".
+  if [ -d "$src" ]; then
+    src="${src%/}/"
+    dst="${dst%/}/"
+  fi
   # shellcheck disable=SC2086  # flags se expande a proposito
   rsync $flags "$src" "$dst" >/dev/null 2>&1
 }
