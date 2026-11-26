@@ -114,6 +114,11 @@ antigua del instalador que concedia permisos por nombre de cuenta. Actualiza el
 repo y relanza: las ACL se aplican por SID (no dependen del idioma ni del nombre
 del equipo) y, si fallan, se avisa una sola vez.
 
+**Dice `winget: NO disponible` aunque `winget --version` funciona.** Version
+antigua del instalador: solo aceptaba versiones sin prefijo y las actuales
+imprimen `v1.29.x`. Actualiza el repo y relanza; `Requisitos del sistema` y
+`doctor` muestran ahora la version detectada (`winget: disponible (v1.29.380)`).
+
 **`ssh -T git@github.com` dice "Host key verification failed".** Falta el
 `known_hosts` pinnado: relanza `bootstrap.ps1` o
 `scripts/setup-git-identity.ps1`. Nunca se usa `ssh-keyscan`.

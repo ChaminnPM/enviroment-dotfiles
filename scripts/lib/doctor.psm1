@@ -94,8 +94,14 @@ function Invoke-DotfilesDoctor {
         $null = Test-DoctorCommand -Name $c.n -Hint $c.h
     }
 
-    if (Test-DotfilesWinget) { Write-DoctorOk 'winget disponible' }
-    else { Write-DoctorWarn 'winget no disponible; los fallbacks pinnados son la unica via' }
+    if (Test-DotfilesWinget) {
+        $wv = Get-DotfilesWingetVersion
+        if ($wv) { Write-DoctorOk "winget disponible ($wv)" }
+        else { Write-DoctorOk 'winget disponible (version desconocida)' }
+    } else {
+        Write-DoctorWarn 'winget no disponible; los fallbacks pinnados son la unica via'
+        Write-DoctorWarn 'si "winget --version" funciona, actualiza el repo (acepta el prefijo "v" de las versiones nuevas)'
+    }
 
     # --- node / npm ---------------------------------------------------------
     $manager = $env:DOTFILES_NODE_MANAGER

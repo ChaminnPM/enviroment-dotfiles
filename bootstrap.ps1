@@ -161,12 +161,17 @@ if ($SkipGit) {
 
 # --- 1. requisitos ---------------------------------------------------------
 $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Requisitos del sistema' -Estimate 10 -Body {
+    $wingetOk = Test-DotfilesWinget
+    $wingetVer = Get-DotfilesWingetVersion
+    $wingetState = if (-not $wingetOk) { 'NO disponible' }
+    elseif ($wingetVer) { "disponible ($wingetVer)" }
+    else { 'disponible (version desconocida)' }
     $info = @{
         OS      = [System.Environment]::OSVersion.VersionString
         Arch    = (Get-DotfilesUiArch)
         PS      = "$($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
         Home    = (Get-DotfilesPaths).Home
-        Winget  = if (Test-DotfilesWinget) { 'disponible' } else { 'NO disponible' }
+        Winget  = $wingetState
         Admin   = if (Test-DotfilesAdmin) { 'si' } else { 'no (por usuario)' }
         Scope   = if ($env:DOTFILES_MACHINE_SCOPE -eq '1') { 'machine' } else { 'user' }
         NodeMgr = $env:DOTFILES_NODE_MANAGER
@@ -179,6 +184,7 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Requisitos del sistema' -Es
 
     if ($info.Winget -eq 'NO disponible') {
         Write-UiWarn 'winget no esta disponible: se usaran los ZIPs pinnados de config/windows/packages.json'
+        Write-UiDim 'Si winget --version funciona, actualiza el repo: versiones nuevas imprimen "v1.29.x" y el instalador debe aceptarlo.'
     }
     if ($env:DOTFILES_MACHINE_SCOPE -eq '1' -and -not $info.Admin -and (Test-DotfilesWinget)) {
         Write-UiWarn 'machine-scope sin sesion elevada: los paquetes que requieran admin se intentaran por usuario'

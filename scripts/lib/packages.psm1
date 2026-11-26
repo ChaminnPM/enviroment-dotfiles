@@ -26,6 +26,7 @@ $script:ManifestCache = $null
 $script:WingetChecked = $false
 $script:WingetAvailable = $false
 $script:WingetPath = $null
+$script:WingetVersion = ''
 
 function Get-DotfilesPackagesManifest {
     param([switch]$Reload)
@@ -61,30 +62,67 @@ function Get-DotfilesFallback {
     }
 }
 
+# Test-DotfilesWingetVersion: la version de winget es utilizable (>= 1)?
+#
+# winget moderno imprime "v1.29.380" CON la 'v' (1.29); versiones antiguas
+# "1.6.3482", y hay previews "1.29.380-preview". Un `-match '^\d+'` rechazaba
+# todas las que empiezan por 'v': el instalador se creia sin winget, pasaba a
+# los ZIP y dejaba python/node en aviso (fallo real en Windows 11 en espanol con
+# winget v1.29.380 perfectamente funcional).
+function Test-DotfilesWingetVersion {
+    param([AllowEmptyString()][AllowNull()][string]$Version)
+    if (-not $Version) { return $false }
+    if ($Version -notmatch '(\d+)\.(\d+)') { return $false }
+    return ([int]$Matches[1] -ge 1)
+}
+
+# Get-DotfilesWingetVersion: version cruda detectada ("v1.29.380"), para
+# mostrarla en 'Requisitos del sistema' y en doctor.
+function Get-DotfilesWingetVersion {
+    $null = Test-DotfilesWinget
+    return $script:WingetVersion
+}
+
+# Test-DotfilesWinget: hay un winget utilizable? cachea el resultado.
+#
+# WINGET_BIN permite forzar el binario (tests y CI), mismo patron que UI_BIN.
 function Test-DotfilesWinget {
-    if (-not $script:WingetChecked) {
-        $script:WingetChecked = $true
-        # -First 1: puede haber dos winget (el App Execution Alias de
-        # WindowsApps y el de Program Files); .Source sobre el array devuelve un
-        # array y la invocacion posterior se rompe.
-        $cmd = Get-Command 'winget.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $cmd) { $cmd = Get-Command 'winget' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 }
-        $script:WingetAvailable = [bool]$cmd
-        if ($script:WingetAvailable) {
-            # Una version vieja (Win10 sin App Installer actualizado) puede no
-            # conocer los flags de user-scope; se trata como no disponible.
-            $ver = ''
-            try { $ver = & $cmd.Source --version 2>$null | Select-Object -First 1 } catch { $ver = '' }
-            if ($ver -notmatch '^\d+') { $script:WingetAvailable = $false }
-            else {
-                $major = [int]($ver -split '\.')[0]
-                if ($major -lt 1) { $script:WingetAvailable = $false }
-            }
-            $script:WingetPath = if ($script:WingetAvailable) { $cmd.Source } else { $null }
-        } else {
-            $script:WingetPath = $null
-        }
+    param([switch]$Force)
+    if ($script:WingetChecked -and -not $Force) { return $script:WingetAvailable }
+    $script:WingetChecked = $true
+    $script:WingetVersion = ''
+    $script:WingetAvailable = $false
+    $script:WingetPath = $null
+
+    $cmd = $null
+    if ($env:WINGET_BIN -and (Test-Path -LiteralPath $env:WINGET_BIN)) {
+        $cmd = [pscustomobject]@{ Source = (Resolve-Path -LiteralPath $env:WINGET_BIN).Path }
     }
+    if (-not $cmd) {
+        # -First 1: puede haber dos winget (App Execution Alias de WindowsApps y
+        # el de Program Files); .Source sobre el array devuelve un array y la
+        # invocacion posterior se rompe.
+        $cmd = Get-Command 'winget.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if (-not $cmd) { $cmd = Get-Command 'winget' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if (-not $cmd -or -not $cmd.Source) { return $false }
+
+    $ver = ''
+    try { $ver = "$(& $cmd.Source --version 2>$null | Select-Object -First 1)".Trim() } catch { $ver = '' }
+    $script:WingetVersion = $ver
+    if (-not $ver) {
+        # Existe pero no dice su version (salida vacia o localizada rara). Se
+        # intenta igualmente: si es demasiado viejo fallara al instalar y se usa
+        # el fallback. Descartarlo aqui repetiria el falso negativo que dejo a
+        # python/node sin instalar.
+        Write-Verbose 'winget presente pero sin version legible; se intenta igualmente'
+        $script:WingetAvailable = $true
+    } elseif (Test-DotfilesWingetVersion -Version $ver) {
+        $script:WingetAvailable = $true
+    } else {
+        Write-Verbose "winget $ver es anterior a 1.0; se usan los fallbacks pinnados"
+    }
+    $script:WingetPath = if ($script:WingetAvailable) { $cmd.Source } else { $null }
     return $script:WingetAvailable
 }
 
