@@ -49,7 +49,7 @@ $onlyOne = $Terminal -or $ProfileOnly -or $GitOnly
 function Invoke-TerminalTheme {
     param([hashtable]$Theme)
     $r = Set-DotfilesWindowsTerminalTheme -Theme $Theme
-    if ($r.skipped) {
+    if (Test-DotfilesResultSkipped -Result $r) {
         Write-UiDim "Windows Terminal: $($r.detail)"
         return
     }

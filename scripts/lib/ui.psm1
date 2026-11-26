@@ -506,7 +506,8 @@ function Invoke-DotfilesLoggedArgv {
     param(
         [Parameter(Mandatory)][string]$Title,
         [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][object[]]$Argv,
-        [int]$TimeoutSec = 0
+        [int]$TimeoutSec = 0,
+        [string]$WorkingDirectory
     )
     if ($Argv.Count -lt 1) { throw 'Invoke-DotfilesLoggedArgv: falta el comando' }
     $log = New-DotfilesStepLog -Label 'argv'
@@ -518,10 +519,10 @@ function Invoke-DotfilesLoggedArgv {
         # El spinner de nui muestra el titulo mientras el comando corre con su
         # salida capturada en el log del paso.
         $code = Invoke-DotfilesNativeLogged -Argv (@($ui, 'spin', '--title', $Title, '--') + $Argv) `
-            -LogFile $log -TimeoutSec $TimeoutSec
+            -LogFile $log -TimeoutSec $TimeoutSec -WorkingDirectory $WorkingDirectory
     } else {
         Write-UiDim "$Title ..."
-        $code = Invoke-DotfilesNativeLogged -Argv $Argv -LogFile $log -TimeoutSec $TimeoutSec
+        $code = Invoke-DotfilesNativeLogged -Argv $Argv -LogFile $log -TimeoutSec $TimeoutSec -WorkingDirectory $WorkingDirectory
         $text = ''
         if (Test-Path -LiteralPath $log) { $text = Get-DotfilesFileText -Path $log }
         if ($text) { Write-Output $text }
@@ -541,7 +542,12 @@ function Invoke-DotfilesNativeLogged {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][object[]]$Argv,
         [Parameter(Mandatory)][string]$LogFile,
-        [int]$TimeoutSec = 0
+        [int]$TimeoutSec = 0,
+        # Directorio de trabajo del hijo. npm lo necesita: `npm install
+        # --prefix <dir>` sigue leyendo el package.json del CWD, asi que desde
+        # C:\Users\X falla con ENOENT (comprobado con npm 10.9.8). Se lanza npm
+        # CON cwd en el proyecto y sin --prefix.
+        [string]$WorkingDirectory
     )
     $Argv = Get-DotfilesExecArgv -Argv (ConvertTo-DotfilesArgv -Values $Argv)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -550,6 +556,7 @@ function Invoke-DotfilesNativeLogged {
         if ($psi.Arguments) { $psi.Arguments += ' ' }
         $psi.Arguments += ('"' + ($Argv[$i] -replace '"', '\"') + '"')
     }
+    if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true

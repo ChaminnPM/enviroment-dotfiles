@@ -113,7 +113,9 @@ try {
             if ($DryRun) {
                 Write-UiDim "[dry-run] npm install --prefix $OpenCodeDir"
             } else {
-                $code = Invoke-DotfilesLoggedArgv -Title 'npm install' -Argv @('npm', '--prefix', $OpenCodeDir, 'install')
+                # npm con cwd en el proyecto: --prefix no basta (npm lee el
+                # package.json del CWD y desde otro directorio falla ENOENT).
+                $code = Invoke-DotfilesLoggedArgv -Title 'npm install' -Argv @('npm', 'install') -WorkingDirectory $OpenCodeDir
                 if ($code -ne 0) { Write-UiWarn 'npm install fallo; revisa node_modules manualmente' }
             }
         } else {

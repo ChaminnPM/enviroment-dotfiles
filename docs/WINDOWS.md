@@ -119,6 +119,17 @@ antigua del instalador: solo aceptaba versiones sin prefijo y las actuales
 imprimen `v1.29.x`. Actualiza el repo y relanza; `Requisitos del sistema` y
 `doctor` muestran ahora la version detectada (`winget: disponible (v1.29.380)`).
 
+**El paso `Restaurar configuracion` avisa `npm error ENOENT ... package.json`.** Version
+antigua: `npm install --prefix` sigue leyendo el `package.json` del directorio
+actual, asi que falla si lanzas el instalador desde `C:\Users\<tu>` (npm 10.x).
+Actualiza el repo: npm se ejecuta ahora con su directorio de trabajo en
+`~/.config/opencode`.
+
+**Instale algo con winget y no aparece hasta abrir otra terminal.** Es el PATH:
+winget lo escribe en el registro y los procesos ya abiertos no lo ven. El
+instalador refresca la sesion tras instalar (y sondea `Program Files\Neovim\bin`
+si hace falta); si aun asi falta, abre una terminal nueva.
+
 **`ssh -T git@github.com` dice "Host key verification failed".** Falta el
 `known_hosts` pinnado: relanza `bootstrap.ps1` o
 `scripts/setup-git-identity.ps1`. Nunca se usa `ssh-keyscan`.

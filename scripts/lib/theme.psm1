@@ -164,7 +164,7 @@ function Update-DotfilesNerdFont {
     $family = $Theme.THEME_FONT_FAMILY
 
     if (Test-DotfilesNerdFontInstalled -Theme $Theme) {
-        return [pscustomobject]@{ ok = $true; installed = $true; detail = "Fuente $family ya instalada" }
+        return [pscustomobject]@{ ok = $true; installed = $true; skipped = $false; detail = "Fuente $family ya instalada" }
     }
 
     $url = '{0}/releases/download/{1}/{2}' -f $Theme.THEME_NERD_REPO_URL, $Theme.THEME_NERD_VERSION, $Theme.THEME_NERD_ASSET
@@ -174,13 +174,13 @@ function Update-DotfilesNerdFont {
         Write-Output '##log Descargando fuente'
         Write-Output "##log $url"
         if (-not (Invoke-DotfilesDownload -Uri $url -OutFile $zip -TimeoutSec 300)) {
-            return [pscustomobject]@{ ok = $false; installed = $false; detail = "no se pudo descargar $url" }
+            return [pscustomobject]@{ ok = $false; installed = $false; skipped = $false; detail = "no se pudo descargar $url" }
         }
 
         $x = Join-Path $tmp 'x'
         $files = @(Expand-DotfilesZip -Zip $zip -Destination $x -ExtensionFilter @('.ttf', '.otf'))
         if ($files.Count -eq 0) {
-            return [pscustomobject]@{ ok = $false; installed = $false; detail = 'el zip de la fuente no traia TTF/OTF' }
+            return [pscustomobject]@{ ok = $false; installed = $false; skipped = $false; detail = 'el zip de la fuente no traia TTF/OTF' }
         }
 
         if (-not (Test-Path -LiteralPath $paths.FontDir)) {
@@ -197,7 +197,7 @@ function Update-DotfilesNerdFont {
             } catch { }
         }
         if ($copied -eq 0) {
-            return [pscustomobject]@{ ok = $false; installed = $false; detail = "no se pudo copiar ninguna fuente a $($paths.FontDir)" }
+            return [pscustomobject]@{ ok = $false; installed = $false; skipped = $false; detail = "no se pudo copiar ninguna fuente a $($paths.FontDir)" }
         }
         Write-Output "##log $copied archivos copiados a $($paths.FontDir)"
 
@@ -206,11 +206,12 @@ function Update-DotfilesNerdFont {
         Write-DotfilesThemeManifest -Theme $Theme | Out-Null
 
         if ($ok) {
-            return [pscustomobject]@{ ok = $true; installed = $true; detail = "Fuente $family instalada ($($Theme.THEME_NERD_VERSION))" }
+            return [pscustomobject]@{ ok = $true; installed = $true; skipped = $false; detail = "Fuente $family instalada ($($Theme.THEME_NERD_VERSION))" }
         }
         return [pscustomobject]@{
             ok        = $true
             installed = $false
+            skipped   = $false
             detail    = "la fuente esta en disco pero no figura en el registro ($registered registros); las apps la veran al reiniciar la sesion"
         }
     } finally {
@@ -368,7 +369,7 @@ function Set-DotfilesWindowsTerminalTheme {
     $raw = Get-DotfilesFileText -Path $settings
     $data = ConvertFrom-DotfilesJsonC -Text $raw
     if ($null -eq $data) {
-        return [pscustomobject]@{ ok = $false; detail = "no se pudo analizar $settings; aplica manualmente el fragmento config/windows-terminal/dracula.json" }
+        return [pscustomobject]@{ ok = $false; skipped = $false; detail = "no se pudo analizar $settings; aplica manualmente el fragmento config/windows-terminal/dracula.json" }
     }
 
     $scheme = Get-DotfilesWindowsTerminalScheme -Theme $Theme
@@ -391,13 +392,13 @@ function Set-DotfilesWindowsTerminalTheme {
     $defaults['font'] = [ordered]@{ face = $Theme.THEME_FONT_FAMILY; size = [double]$Theme.THEME_FONT_SIZE }
 
     if ($DryRun) {
-        return [pscustomobject]@{ ok = $true; detail = "dry-run: se escribira $settings" }
+        return [pscustomobject]@{ ok = $true; skipped = $false; detail = "dry-run: se escribira $settings" }
     }
 
     Backup-DotfilesFile -Path $settings | Out-Null
     $json = ConvertTo-DotfilesJsonC -Data $data
     Write-DotfilesFile -Path $settings -Content $json -Encoding 'utf8' | Out-Null
-    return [pscustomobject]@{ ok = $true; detail = "Windows Terminal: esquema Dracula y fuente $($Theme.THEME_FONT_FAMILY) aplicados" }
+    return [pscustomobject]@{ ok = $true; skipped = $false; detail = "Windows Terminal: esquema Dracula y fuente $($Theme.THEME_FONT_FAMILY) aplicados" }
 }
 
 # ConvertFrom-DotfilesJsonC: settings.json de Windows Terminal admite

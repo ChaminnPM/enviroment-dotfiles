@@ -242,6 +242,10 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Dependencias base' -Estimat
         Write-Output "##progress $([int](100 * $i / $missing.Count))"
     }
 
+    # winget actualiza el PATH en el registro, no en este proceso: sin refrescar,
+    # `python`/`git` recien instalados siguen "sin estar" y el paso aborta.
+    $null = Update-DotfilesSessionPath
+
     # python3 shim: graphify y los validadores de skills lo invocan por ese
     # nombre y en Windows el ejecutable es python.exe.
     $py = Get-Command 'python.exe', 'python' -CommandType Application -ErrorAction SilentlyContinue |
@@ -269,7 +273,7 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Dependencias base' -Estimat
 $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Fuente (JetBrains Mono Nerd)' -Optional -Estimate 60 -Body {
     $theme = Read-DotfilesTheme
     $r = Update-DotfilesNerdFont -Theme $theme
-    if ($r.skipped) {
+    if (Test-DotfilesResultSkipped -Result $r) {
         Write-UiWarn $r.detail
         exit 0
     }
@@ -441,7 +445,27 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Paquetes custom' -Estimate 
     # neovim: LazyVim/treesitter requieren version > 0.11.2 y un compilador.
     $needNvim = ($selected -contains 'neovim') -or ($selected -contains 'lazyvim')
     if ($needNvim) {
+        # El proceso actual conserva el PATH con el que arranco; winget escribe
+        # el suyo en el registro. Sin refrescar, nvim recien instalado "no esta".
+        $null = Update-DotfilesSessionPath
         $ver = Get-DotfilesNvimVersion
+        if (-not $ver) {
+            # Cinturon y tirantes: instalaciones machine-scope dejan nvim fuera
+            # del PATH de usuario.
+            $cands = @()
+            if ($env:ProgramFiles) { $cands += (Join-Path $env:ProgramFiles 'Neovim\bin') }
+            if ($env:LOCALAPPDATA) {
+                $cands += (Join-Path $env:LOCALAPPDATA 'Programs\Neovim\bin')
+                $cands += (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links')
+            }
+            foreach ($cand in $cands) {
+                if ($cand -and (Test-Path -LiteralPath (Join-Path $cand 'nvim.exe'))) {
+                    $env:Path = "$cand;$env:Path"
+                    $ver = Get-DotfilesNvimVersion
+                    break
+                }
+            }
+        }
         if (-not $ver) {
             Write-UiWarn 'neovim no quedo disponible; LazyVim no funcionara'
         } elseif (-not (Test-DotfilesSemverGt -Version $ver -Minimum '0.11.2')) {
@@ -565,6 +589,9 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'OpenCode' -Estimate 120 -Bo
     foreach ($d in @((Get-DotfilesPaths).BinDir, (Join-Path $env:APPDATA 'npm'), (Join-Path $env:LOCALAPPDATA 'Programs\opencode\bin'))) {
         if (Test-Path -LiteralPath $d) { $null = Add-DotfilesEnvPath -Dir $d }
     }
+    # Igual que en 'Paquetes custom': npm -g escribe opencode en %APPDATA%\npm
+    # y el proceso actual no lo ve sin releer el PATH del registro.
+    $null = Update-DotfilesSessionPath
     if (Test-DotfilesCommand 'opencode') {
         $v = & opencode --version 2>$null | Select-Object -First 1
         Write-UiOk "OpenCode $v"
@@ -600,10 +627,13 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Restaurar configuracion' -E
         if (Test-DotfilesCommand 'npm') {
             $log = Join-Path $paths.LogDir ("npm-install-{0}-{1}.log" -f (Get-DotfilesStamp), $PID)
             Write-UiStepLog 'Instalando dependencias npm'
-            $code = Invoke-DotfilesNativeLogged -Argv @('npm', 'install', '--prefix', $dst, '--no-audit', '--no-fund') -LogFile $log -TimeoutSec 900
+            # Sin --prefix: npm lee el package.json del CWD antes del prefix y
+            # desde C:\Users\X falla con ENOENT (npm 10.9.8). El cwd del hijo
+            # es el proyecto.
+            $code = Invoke-DotfilesNativeLogged -Argv @('npm', 'install', '--no-audit', '--no-fund') -LogFile $log -TimeoutSec 900 -WorkingDirectory $dst
             if ($code -ne 0) {
                 Write-UiStepLog 'Reintentando npm install (prefer-online)'
-                $code = Invoke-DotfilesNativeLogged -Argv @('npm', 'install', '--prefix', $dst, '--no-audit', '--no-fund', '--prefer-online') -LogFile $log -TimeoutSec 900
+                $code = Invoke-DotfilesNativeLogged -Argv @('npm', 'install', '--no-audit', '--no-fund', '--prefer-online') -LogFile $log -TimeoutSec 900 -WorkingDirectory $dst
                 if ($code -eq 0) { Write-UiStepLog 'npm install exitoso tras el reintento' }
                 else {
                     Write-UiWarn "npm install fallo; revisa $log"
@@ -626,7 +656,7 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Windows Terminal (tema)' -O
         exit 0
     }
     $r = Set-DotfilesWindowsTerminalTheme -Theme $theme
-    if ($r.skipped) { Write-UiStepLog $r.detail; exit 0 }
+    if (Test-DotfilesResultSkipped -Result $r) { Write-UiStepLog $r.detail; exit 0 }
     if ($r.ok) { Write-UiOk $r.detail }
     else { Write-UiWarn $r.detail }
 }

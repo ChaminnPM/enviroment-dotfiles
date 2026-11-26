@@ -641,6 +641,22 @@ function Test-DotfilesCommand {
     return [bool](Get-Command $Name -CommandType Application, ExternalScript -ErrorAction SilentlyContinue)
 }
 
+# Test-DotfilesResultSkipped: el resultado de un paso opcional dice "omitido"?
+#
+# Con Set-StrictMode 2.0 leer una propiedad que el objeto no tiene es un error
+# FATAL. Update-DotfilesNerdFont y Set-DotfilesWindowsTerminalTheme devolvian
+# objetos sin `skipped` en varias ramas y los pasos de fuente, Windows Terminal y
+# tema morian con "No se encuentra la propiedad 'skipped'" (el de tema, ademas,
+# abortaba el resto de la instalacion). Aqui se lee por PSObject.Properties y la
+# ausencia significa "no omitido".
+function Test-DotfilesResultSkipped {
+    param([AllowNull()]$Result)
+    if ($null -eq $Result) { return $true }
+    $p = $Result.PSObject.Properties['skipped']
+    if (-not $p) { return $false }
+    return [bool]$p.Value
+}
+
 # ConvertTo-DotfilesArgv aplana argv: si un elemento es en si un array, se
 # queda con el primero.
 #
