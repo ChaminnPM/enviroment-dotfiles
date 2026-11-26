@@ -1,0 +1,84 @@
+{
+  "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
+  "$comment": [
+    "Puerto fiel del tema 'vscode' de oh-my-bash (el que usa la capa bash) para",
+    "que el prompt de Windows se vea igual que en Linux/WSL.",
+    "Estructura original (themes/vscode/vscode.theme.sh):",
+    "  <usuario verde> <flecha roja si fallo> <ruta azul claro> (<rama>) $",
+    "  - usuario: ANSI 0;32  -> green",
+    "  - flecha:  ANSI 1;31 cuando el ultimo comando fallo -> brightRed",
+    "  - ruta:    ANSI 1;34 -> brightBlue, PROMPT_DIRTRIM=4",
+    "  - rama:    parentesis ANSI 0;36 (cyan), nombre ANSI 1;31 (brightRed)",
+    "  - sucio:   ANSI 1;33 (brightYellow) con el glifo de oh-my-bash",
+    "Los colores salen de config/theme/dracula.env (mismos slots ANSI)."
+  ],
+  "blocks": [
+    {
+      "alignment": "left",
+      "segments": [
+        {
+          "foreground": "#50fa7b",
+          "style": "plain",
+          "template": "{{ .UserName }} ",
+          "type": "session"
+        },
+        {
+          "foreground": "#f8f8f2",
+          "foreground_templates": [
+            "{{ if gt .Code 0 }}#ff6e6e{{ end }}"
+          ],
+          "style": "plain",
+          "template": "\u279c ",
+          "type": "status"
+        },
+        {
+          "foreground": "#d6acff",
+          "options": {
+            "home_icon": "~",
+            "max_depth": 4,
+            "style": "full"
+          },
+          "style": "plain",
+          "template": "{{ .Path }} ",
+          "type": "path"
+        },
+        {
+          "foreground": "#8be9fd",
+          "style": "plain",
+          "template": "(",
+          "type": "git"
+        },
+        {
+          "foreground": "#ff6e6e",
+          "options": {
+            "branch_icon": ""
+          },
+          "style": "plain",
+          "template": "{{ .HEAD }}",
+          "type": "git"
+        },
+        {
+          "foreground": "#ffffa5",
+          "style": "plain",
+          "template": "{{ if or .Working.Changed .Working.Untracked }} \u2717{{ end }}",
+          "type": "git"
+        },
+        {
+          "foreground": "#8be9fd",
+          "style": "plain",
+          "template": ") ",
+          "type": "git"
+        },
+        {
+          "foreground": "#f8f8f2",
+          "style": "plain",
+          "template": "$ ",
+          "type": "text"
+        }
+      ],
+      "type": "prompt"
+    }
+  ],
+  "final_space": true,
+  "version": 4
+}

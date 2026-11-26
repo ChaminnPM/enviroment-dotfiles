@@ -3,6 +3,7 @@
   "plugins": [
     "@arandevcode/opencode-quota-extended",
     "@raultov/opencode-antigravity-v2",
-    "./plugins/google-quota"
+    "./plugins/google-quota",
+    "@dietrichgebert/ponytail"
   ]
 }

@@ -711,28 +711,44 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'oh-my-posh' -Estimate 90 -B
         }
     }
 
-    # El tema Dracula se fija en ~/.config/enviroment-dotfiles/themes: mismo
-    # arbol que todo lo demas y sin depender de POSH_THEMES_PATH.
+    # El prompt de Windows replica el tema de oh-my-bash (misma forma en las dos
+    # capas). config/theme/dracula.env elige el fichero con THEME_OMP_THEME.
+    # Se fija en ~/.config/enviroment-dotfiles/themes: mismo arbol que todo lo
+    # demas y sin depender de POSH_THEMES_PATH.
+    $ompName = if ($theme.THEME_OMP_THEME) { $theme.THEME_OMP_THEME } else { 'dracula' }
+    if ($ompName -notmatch '^[A-Za-z0-9._-]+$') {
+        Write-UiWarn "THEME_OMP_THEME invalido ('$ompName'); se usa dracula"
+        $ompName = 'dracula'
+    }
     $themeDir = Join-DotfilesPath -Base $paths.Project -Child 'themes/oh-my-posh'
     if (-not (Test-Path -LiteralPath $themeDir)) { New-Item -ItemType Directory -Force -Path $themeDir | Out-Null }
-    $omp = Join-Path $themeDir 'dracula.omp.json'
-    if (-not (Test-Path -LiteralPath $omp)) {
+    $omp = Join-Path $themeDir ("{0}.omp.json" -f $ompName)
+    $localTheme = Join-DotfilesPath -Base $paths.RepoDir -Child ("config/oh-my-posh/{0}.omp.json" -f $ompName)
+    if (-not (Test-Path -LiteralPath $localTheme) -and $ompName -ne 'dracula') {
+        Write-UiWarn "tema de prompt '$ompName' no esta en el repo; se usa dracula"
+        $ompName = 'dracula'
+        $omp = Join-Path $themeDir 'dracula.omp.json'
+        $localTheme = Join-DotfilesPath -Base $paths.RepoDir -Child 'config/oh-my-posh/dracula.omp.json'
+    }
+    # Se re-copia siempre desde el repo: es un asset gestionado y asi llegan las
+    # correcciones del tema sin borrar nada a mano.
+    if (Test-Path -LiteralPath $localTheme) {
+        Copy-DotfilesTree -Source $localTheme -Destination $omp | Out-Null
+    } elseif (-not (Test-Path -LiteralPath $omp)) {
+        $poshThemes = $env:POSH_THEMES_PATH
         $url = $null
         if (@($app.Keys) -contains 'theme') { $url = $app['theme']['url'] }
-        $localTheme = Join-DotfilesPath -Base $paths.RepoDir -Child 'config/oh-my-posh/dracula.omp.json'
-        $poshThemes = $env:POSH_THEMES_PATH
-        if (Test-Path -LiteralPath $localTheme) {
-            Copy-DotfilesTree -Source $localTheme -Destination $omp | Out-Null
-        } elseif ($poshThemes -and (Test-Path -LiteralPath (Join-Path $poshThemes 'dracula.omp.json'))) {
-            Copy-DotfilesTree -Source (Join-Path $poshThemes 'dracula.omp.json') -Destination $omp | Out-Null
-        } elseif ($url) {
+        if ($poshThemes -and (Test-Path -LiteralPath (Join-Path $poshThemes ("{0}.omp.json" -f $ompName)))) {
+            Copy-DotfilesTree -Source (Join-Path $poshThemes ("{0}.omp.json" -f $ompName)) -Destination $omp | Out-Null
+        } elseif ($url -and $ompName -eq 'dracula') {
             $null = Invoke-DotfilesDownload -Uri $url -OutFile $omp -TimeoutSec 60
         }
     }
     if (-not (Test-Path -LiteralPath $omp)) {
-        Write-UiWarn 'No se pudo fijar el tema Dracula de oh-my-posh'
+        Write-UiWarn "No se pudo fijar el tema de oh-my-posh ($ompName)"
         exit 1
     }
+    Write-UiStepLog "prompt: $ompName ($omp)"
 
     $body = @(
         "`$poshConfig = '$($omp.Replace("'", "''"))'",
@@ -750,7 +766,7 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'oh-my-posh' -Estimate 90 -B
     if ($r.failed.Count -gt 0) {
         Write-UiWarn ("perfiles sin bloque de oh-my-posh: " + ($r.failed -join ', '))
     }
-    "oh-my-posh listo (tema $($theme.THEME_NAME))"
+    "oh-my-posh listo (prompt $ompName)"
 }
 
 # --- 14. tema ---------------------------------------------------------------

@@ -203,7 +203,7 @@
         "url": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/v33.4.0/themes/dracula.omp.json",
         "env": "POSH_THEME_URL"
       },
-      "note": "Reemplazo de oh-my-bash en Windows; el tema se fija con config/oh-my-posh/dracula.json."
+      "note": "Reemplazo de oh-my-bash en Windows; el tema se elige con THEME_OMP_THEME (config/oh-my-posh/<tema>.omp.json)."
     }
   ]
 }

@@ -42,7 +42,8 @@ el SO.
 - **Neovim** (> 0.11.2) con LazyVim.
 - **Node** con nvm (Linux/WSL) o fnm (Windows), y **OpenCode**
   (`@opencode/cli`).
-- **Prompt**: oh-my-bash (Linux/WSL) u oh-my-posh (Windows).
+- **Prompt**: oh-my-bash (Linux/WSL) u oh-my-posh (Windows) con el **mismo
+  tema `vscode` en las dos capas** (`usuario -> ruta (rama) $`).
 - **Tema Dracula** en terminal, prompt, bat, eza, fzf, git, nvim y OpenCode,
   con la fuente JetBrainsMono Nerd Font v3.4.0 instalada.
 - **Configuracion publica** en `~/.config/opencode`: agentes, skills (incluidas

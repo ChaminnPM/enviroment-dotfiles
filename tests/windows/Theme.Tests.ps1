@@ -298,3 +298,42 @@ Describe 'Bloque del tema en el perfil' {
         }
     }
 }
+
+Describe 'Tema del prompt (oh-my-posh)' {
+    It 'THEME_OMP_THEME elige un fichero que existe en el repo' {
+        $t = Read-DotfilesTheme
+        $t.THEME_OMP_THEME | Should -Be 'vscode'
+        # La clave esta en dracula.env (fuente unica), no solo como default.
+        $envFile = Join-DotfilesPath -Base (Get-DotfilesPaths).RepoDir -Child 'config/theme/dracula.env'
+        (Get-DotfilesFileText -Path $envFile) | Should -BeLike "*THEME_OMP_THEME='vscode'*"
+        $f = Join-DotfilesPath -Base (Get-DotfilesPaths).RepoDir -Child "config/oh-my-posh/$($t.THEME_OMP_THEME).omp.json"
+        Test-Path -LiteralPath $f | Should -BeTrue
+    }
+
+    It 'el puerto de oh-my-bash conserva forma y colores ANSI' {
+        # oh-my-bash vscode: "usuario -> ruta (rama) $" con ANSI 0;32, 1;34,
+        # 0;36, 1;31 y 1;33. Aqui se comprueba que el de Windows usa los mismos.
+        $t = Read-DotfilesTheme
+        $f = Join-DotfilesPath -Base (Get-DotfilesPaths).RepoDir -Child 'config/oh-my-posh/vscode.omp.json'
+        $d = Read-DotfilesJson -Path $f -AsHashtable
+        @($d['blocks']).Count | Should -Be 1
+        $segs = @($d['blocks'][0]['segments'])
+        @($segs | ForEach-Object { $_['type'] }) |
+            Should -Be @('session', 'status', 'path', 'git', 'git', 'git', 'git', 'text')
+        $segs[0]['foreground'] | Should -Be $t.THEME_GREEN
+        $segs[1]['foreground_templates'][0] | Should -BeLike "*$($t.THEME_BRIGHT_RED)*"
+        $segs[2]['foreground'] | Should -Be $t.THEME_BRIGHT_BLUE
+        $segs[2]['options']['max_depth'] | Should -Be 4
+        $segs[3]['foreground'] | Should -Be $t.THEME_CYAN
+        $segs[4]['foreground'] | Should -Be $t.THEME_BRIGHT_RED
+        $segs[5]['foreground'] | Should -Be $t.THEME_BRIGHT_YELLOW
+        $segs[7]['template'] | Should -BeLike '*$*'
+        # oh-my-bash no usa powerline: ningun segmento con fondo.
+        @($segs | Where-Object { Test-DotfilesKey -Map $_ -Key 'background' }).Count | Should -Be 0
+    }
+
+    It 'dracula sigue disponible como alternativa' {
+        $f = Join-DotfilesPath -Base (Get-DotfilesPaths).RepoDir -Child 'config/oh-my-posh/dracula.omp.json'
+        Test-Path -LiteralPath $f | Should -BeTrue
+    }
+}

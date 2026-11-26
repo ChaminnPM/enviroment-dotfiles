@@ -64,6 +64,7 @@ function Read-DotfilesTheme {
         THEME_NERD_REPO_URL  = 'https://github.com/ryanoasis/nerd-fonts'
         THEME_NERD_ASSET     = 'JetBrainsMono.zip'
         THEME_OMB_THEME      = 'vscode'
+        THEME_OMP_THEME      = 'vscode'
         THEME_EZA_COLORS     = ''
         THEME_FZF_OPTS       = ''
     }

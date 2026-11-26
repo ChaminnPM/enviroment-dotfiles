@@ -101,6 +101,22 @@ sola UAC) en lugar de instalar por usuario.
 `Unblock-File "$HOME\.config\enviroment-dotfiles\bin\nui.exe"`. El checksum esta
 en `bin/SHA256SUMS` y el instalador lo verifica antes de ejecutarlo.
 
+## Prompt
+
+El prompt es el puerto de `vscode`, el tema que usa oh-my-bash en Linux/WSL:
+`usuario ➜ ruta (rama) $`, con los colores por slot ANSI (`0;32`, `1;34`,
+`0;36`, `1;31`, `1;33`) que salen de `config/theme/dracula.env`. Se elige con
+`THEME_OMP_THEME` en ese mismo archivo:
+
+| Valor | Aspecto |
+|---|---|
+| `vscode` (por defecto) | identico al de oh-my-bash, sin powerline |
+| `dracula` | powerline Dracula con hora/rama/node |
+
+Tras cambiarlo, relanza `-Only "oh-my-posh"` (el fichero se copia a
+`~/.config/enviroment-dotfiles/themes/oh-my-posh/<tema>.omp.json` y el bloque del
+perfil se reescribe solo).
+
 **El panel se ve como texto plano.** Consola legacy sin VT o terminal menor de
 64x14. Usa Windows Terminal o fuerza el modo texto con `-Plain`.
 
