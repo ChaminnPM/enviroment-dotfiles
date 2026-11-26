@@ -520,11 +520,36 @@ function Add-DotfilesUserPath {
 
 # --- ACLs ------------------------------------------------------------------
 
-# Set-DotfilesPrivateAcl restringe un archivo al usuario actual.
+# SIDs que pueden conservar acceso a un archivo privado: el SO y los admins los
+# necesitan para tareas de mantenimiento. Se comparan por SID y no por nombre
+# porque los nombres de las cuentas conocidas estan localizados
+# ("BUILTIN\Administrators" es "BUILTIN\Administradores" en Windows espanol).
+$script:DotfilesAllowedSids = @(
+    'S-1-5-18',     # NT AUTHORITY\SYSTEM
+    'S-1-5-32-544', # BUILTIN\Administrators
+    'S-1-3-0'       # CREATOR OWNER
+)
+
+# Get-DotfilesUserSid: SID del usuario que ejecuta el instalador.
 #
-# Sustituto de `chmod 600`. Es obligatorio para claves SSH: el OpenSSH de
-# Windows rechaza claves legibles por otros, y un resultado de npm en
-# %LOCALAPPDATA% heredaria permisos de "Todos".
+# Las ACL se conceden por SID, no por "MAQUINA\usuario": icacls resuelve el
+# nombre contra el dominio local y devuelve ERROR_NONE_MAPPED (1332) si el
+# equipo se renombro, la cuenta es de Microsoft o el nombre no coincide. El
+# SID es estable y no depende del idioma ni del nombre visible.
+function Get-DotfilesUserSid {
+    try {
+        return [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    } catch {
+        return ''
+    }
+}
+
+# Set-DotfilesPrivateAcl restringe un archivo o directorio al usuario actual.
+#
+# Sustituto de `chmod 600`: quita la herencia y concede acceso total solo al
+# usuario, a SYSTEM y a Administradores. Es obligatorio para claves SSH (el
+# OpenSSH de Windows rechaza claves legibles por otros) y para los resultados
+# de formulario.
 # En no-Windows es un no-op (ahi manda el chmod real del runner).
 function Set-DotfilesPrivateAcl {
     param(
@@ -533,26 +558,48 @@ function Set-DotfilesPrivateAcl {
     )
     if (-not (Test-DotfilesWindows)) { return $false }
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $sid = Get-DotfilesUserSid
+    if (-not $sid) { return $false }
+    $inherit = if ($Kind -eq 'dir') { '(OI)(CI)(F)' } else { '(F)' }
+    # Un solo /grant:r con los tres principals: es la forma documentada de
+    # icacls (reemplaza las concesiones previas y deja ACL = 3 lineas).
+    $icaclsArgs = @($Path, '/inheritance:r', '/grant:r')
+    foreach ($principal in @("*$sid", '*S-1-5-18', '*S-1-5-32-544')) {
+        $icaclsArgs += "$principal$inherit"
+    }
     try {
-        $user = "$env:USERDOMAIN+$env:USERNAME"
-        if ($Kind -eq 'dir') {
-            & icacls.exe $Path '/inheritance:r' '/grant:r' "${user}:(OI)(CI)(F)" | Out-Null
-        } else {
-            & icacls.exe $Path '/inheritance:r' '/grant:r' "${user}:(R)" | Out-Null
-        }
-        return ($LASTEXITCODE -eq 0)
+        # El mensaje de icacls (localizado) se guarda para Write-Verbose: si la
+        # ACL falla, quien llama decide si avisar (Initialize-DotfilesUi lo
+        # hace una sola vez, doctor por archivo).
+        $out = & icacls.exe @icaclsArgs 2>&1
+        if ($LASTEXITCODE -eq 0) { return $true }
+        $first = @($out | Where-Object { $_ } | Select-Object -First 1)
+        Write-Verbose "icacls fallo en ${Path}: $($first -join ' ')"
+        return $false
     } catch {
+        Write-Verbose "icacls fallo en ${Path}: $($_.Exception.Message)"
         return $false
     }
 }
 
-# Get-DotfilesAclSids lista los principals con acceso (para `doctor`).
+# Get-DotfilesAclSids lista los SIDs con acceso explicito a la ruta.
+#
+# Devuelve SIDs (S-1-5-...) y no nombres para que la comprobacion funcione en
+# cualquier idioma. Un principal que no se pueda traducir se devuelve tal cual,
+# y entonces no coincide con la lista permitida: mejor un falso negativo (que
+# doctor avise) que un falso positivo.
 function Get-DotfilesAclSids {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return @() }
     try {
         $acl = Get-Acl -LiteralPath $Path
-        return @($acl.Access | ForEach-Object { $_.IdentityReference.ToString() })
+        return @($acl.Access | ForEach-Object {
+                try {
+                    $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+                } catch {
+                    $_.IdentityReference.ToString()
+                }
+            })
     } catch {
         return @()
     }
@@ -563,10 +610,11 @@ function Get-DotfilesAclSids {
 function Test-DotfilesPrivateAcl {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-DotfilesWindows)) { return $true }
-    $sids = Get-DotfilesAclSids -Path $Path
+    $sids = @(Get-DotfilesAclSids -Path $Path)
     if ($sids.Count -eq 0) { return $false }
-    $user = "$env:USERDOMAIN+$env:USERNAME"
-    $allowed = @($user, 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators', 'NT AUTHORITY\CREATOR OWNER')
+    $sid = Get-DotfilesUserSid
+    if (-not $sid) { return $false }
+    $allowed = @($sid) + $script:DotfilesAllowedSids
     foreach ($s in $sids) {
         if ($allowed -notcontains $s) { return $false }
     }
@@ -580,14 +628,39 @@ function Test-DotfilesCommand {
     return [bool](Get-Command $Name -CommandType Application, ExternalScript -ErrorAction SilentlyContinue)
 }
 
+# ConvertTo-DotfilesArgv aplana argv: si un elemento es en si un array, se
+# queda con el primero.
+#
+# Caso real: `@((Get-Command 'curl.exe').Source, '-fsSL', ...)` cuando hay dos
+# copias de curl en el PATH. El parametro [string[]] coercionaria el array a
+# "C:\system32\curl.exe C:\scoop\curl.exe" y CreateProcess buscaria un
+# ejecutable con ese nombre: el instalador muere con un error ilegible (o, peor,
+# en silencio). Aplanar aqui convierte ese fallo en "usa la primera coincidencia"
+# que es exactamente lo que haria el shell.
+function ConvertTo-DotfilesArgv {
+    param([object[]]$Values)
+    $out = @()
+    foreach ($v in @($Values)) {
+        if ($v -is [array]) {
+            if ($v.Count -eq 0) { continue }
+            Write-Verbose "argv: elemento con $($v.Count) valores, se usa '$($v[0])'"
+            $v = $v[0]
+        }
+        if ($null -eq $v) { continue }
+        $out += [string]$v
+    }
+    return ,$out
+}
+
 # Invoke-DotfilesNative ejecuta argv literal (nunca una cadena de shell) y
 # devuelve el codigo de salida. La salida va directo al panel, que la loguea.
 function Invoke-DotfilesNative {
     param(
-        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string[]]$Argv,
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][object[]]$Argv,
         [int]$TimeoutSec = 0,
         [string]$WorkingDirectory
     )
+    $Argv = ConvertTo-DotfilesArgv -Values $Argv
     if ($Argv.Count -lt 1 -or -not $Argv[0]) { throw 'Invoke-DotfilesNative: falta el comando' }
     $exe = $Argv[0]
     $tail = @()
@@ -688,9 +761,15 @@ function Get-DotfilesQuotedArgs {
 # Deterministico entre PowerShell 5.1 y 7, que es lo que exige ssh-keygen.
 function Invoke-DotfilesNativeQuoted {
     param(
-        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string[]]$Argv,
-        [string]$WorkingDirectory
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][object[]]$Argv,
+        [string]$WorkingDirectory,
+        # AttachConsole: el hijo comparte la consola del padre. Es obligatorio
+        # para las TUI (nui steps run): con CreateNoWindow el proceso queda sin
+        # la consola del padre, no detecta TTY y sus mensajes de error se
+        # pierden, asi que el panel "no hace nada" sin explicacion.
+        [switch]$AttachConsole
     )
+    $Argv = ConvertTo-DotfilesArgv -Values $Argv
     if ($Argv.Count -lt 1 -or -not $Argv[0]) { throw 'Invoke-DotfilesNativeQuoted: falta el comando' }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Argv[0]
@@ -699,7 +778,7 @@ function Invoke-DotfilesNativeQuoted {
     }
     if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
     $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
+    $psi.CreateNoWindow = -not $AttachConsole
     try {
         $p = [System.Diagnostics.Process]::Start($psi)
         $p.WaitForExit()
@@ -719,11 +798,15 @@ function Get-DotfilesSelfPwsh {
     if ($env:NUI_PWSH) { return $env:NUI_PWSH }
     $mine = (Get-Process -Id $PID -ErrorAction SilentlyContinue)
     if ($mine -and $mine.Path -and $mine.Path -match 'pwsh(\.exe)?$') { return $mine.Path }
+    # Select-Object -First 1: Get-Command devuelve TODAS las coincidencias del
+    # PATH y `.Source` sobre un array produce un array. Ese array acaba como
+    # FileName de ProcessStartInfo (unido con espacios) y el proceso no arranca:
+    # "no se reconoce el termino 'C:\...\pwsh.exe C:\...\pwsh.exe'".
     foreach ($cand in @('pwsh', 'pwsh.exe')) {
-        $cmd = Get-Command $cand -CommandType Application -ErrorAction SilentlyContinue
+        $cmd = Get-Command $cand -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($cmd) { return $cmd.Source }
     }
-    $ps = Get-Command 'powershell.exe' -CommandType Application -ErrorAction SilentlyContinue
+    $ps = Get-Command 'powershell.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($ps) { return $ps.Source }
     return 'powershell.exe'
 }
@@ -731,7 +814,8 @@ function Get-DotfilesSelfPwsh {
 # Resolve-DotfilesExe: ruta del ejecutable para Start-Process/ProcessStartInfo.
 function Resolve-DotfilesExe {
     param([Parameter(Mandatory)][string]$Name)
-    $cmd = Get-Command $Name -CommandType Application, ExternalScript -ErrorAction SilentlyContinue
+    $cmd = Get-Command $Name -CommandType Application, ExternalScript -ErrorAction SilentlyContinue |
+        Select-Object -First 1
     if ($cmd) { return $cmd.Source }
     return $Name
 }
@@ -756,7 +840,7 @@ function Invoke-DotfilesDownload {
     } catch { }
 
     $ok = $false
-    $curl = Get-Command 'curl.exe' -CommandType Application -ErrorAction SilentlyContinue
+    $curl = Get-Command 'curl.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($curl) {
         for ($i = 0; $i -lt $Retries -and -not $ok; $i++) {
             $code = Invoke-DotfilesNative -Argv @($curl.Source, '-fsSL', '--retry', '2', '--max-time', "$TimeoutSec", '-o', $OutFile, $Uri)
@@ -1130,7 +1214,7 @@ function Get-DotfilesNvimVersion {
 # Get-DotfilesCC: compilador C para nvim-treesitter/LazyVim.
 function Get-DotfilesCC {
     foreach ($c in @('gcc', 'clang', 'cl')) {
-        $cmd = Get-Command $c -CommandType Application -ErrorAction SilentlyContinue
+        $cmd = Get-Command $c -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($cmd) { return $cmd.Source }
     }
     return $null
@@ -1191,7 +1275,7 @@ if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue
     exit 1
 }
 $pwsh = 'pwsh'
-$alt = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue
+$alt = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not (Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue)) {
     if ($alt) { $pwsh = $alt.Source } else { Write-Error 'PowerShell no disponible'; exit 1 }
 }

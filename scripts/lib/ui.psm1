@@ -34,6 +34,20 @@ function Initialize-DotfilesUi {
         }
         if ($d) { [void](Set-DotfilesPrivateAcl -Path $d -Kind dir) }
     }
+    # Autocomprobacion de ACL: si icacls no pudo quitar la herencia se avisa
+    # UNA vez y con un mensaje util. Antes el sintoma eran decenas de lineas de
+    # error de icacls y claves SSH que OpenSSH rechaza sin explicar por que.
+    if (Test-DotfilesWindows) {
+        $check = @($Paths.LogDir, $Paths.StateDir, $Paths.BackupDir, $Paths.BinDir) |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+        if ($check) {
+            $protected = $false
+            try { $protected = (Get-Acl -LiteralPath $check).AreAccessRulesProtected } catch { $protected = $false }
+            if (-not $protected) {
+                Write-UiWarn "no se pudieron restringir los permisos de $check; las claves SSH y los logs quedan legibles por otros usuarios (revisa que icacls.exe funcione)"
+            }
+        }
+    }
 }
 
 function Write-DotfilesReportEntry {
@@ -138,11 +152,13 @@ function Get-DotfilesUiBinaryName {
 
 # Get-DotfilesUiBin: ruta del nui utilisable, o $null.
 function Get-DotfilesUiBin {
-    if ($script:UiBinCache -and (Test-Path -LiteralPath $script:UiBinCache)) { return $script:UiBinCache }
+    # UI_BIN va ANTES de la cache: es un override explicito (lo usan los tests y
+    # `Add-DotfilesUi`), y una cache de otra sesion de Pester no debe ganarle.
     if ($env:UI_BIN -and (Test-Path -LiteralPath $env:UI_BIN)) {
         $script:UiBinCache = $env:UI_BIN
         return $script:UiBinCache
     }
+    if ($script:UiBinCache -and (Test-Path -LiteralPath $script:UiBinCache)) { return $script:UiBinCache }
     $paths = Get-DotfilesPaths
     $name = Get-DotfilesUiBinaryName
     $candidates = @(
@@ -484,7 +500,7 @@ function New-DotfilesStepLog {
 function Invoke-DotfilesLoggedArgv {
     param(
         [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string[]]$Argv,
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][object[]]$Argv,
         [int]$TimeoutSec = 0
     )
     if ($Argv.Count -lt 1) { throw 'Invoke-DotfilesLoggedArgv: falta el comando' }
@@ -518,10 +534,11 @@ function Invoke-DotfilesLoggedArgv {
 # que se implementa aqui con ProcessStartInfo para capturar ambos flujos.
 function Invoke-DotfilesNativeLogged {
     param(
-        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string[]]$Argv,
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][object[]]$Argv,
         [Parameter(Mandatory)][string]$LogFile,
         [int]$TimeoutSec = 0
     )
+    $Argv = ConvertTo-DotfilesArgv -Values $Argv
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Argv[0]
     for ($i = 1; $i -lt $Argv.Count; $i++) {
@@ -985,13 +1002,36 @@ function Invoke-DotfilesPanelRun {
 
         if ($usePanel) {
             # La TUI necesita la consola cruda: cualquier reemision linea a
-            # linea romperia los controles de alt-screen de bubbletea.
-            $code = Invoke-DotfilesNativeQuoted -Argv @(
+            # linea romperia los controles de alt-screen de bubbletea. Por eso
+            # se lanza adjunta a la consola del padre (-AttachConsole): con
+            # CreateNoWindow el hijo no ve la consola, cae al modo texto y sus
+            # errores se pierden.
+            $before = @(Get-ChildItem -LiteralPath $LogDir -Filter 'steps-*' -File -ErrorAction SilentlyContinue |
+                    Select-Object -ExpandProperty Name)
+            $code = Invoke-DotfilesNativeQuoted -AttachConsole -Argv @(
                 $ui, 'steps', 'run',
                 '--plan', $planPath,
                 '--log-dir', $LogDir,
                 '--title', $Panel.Title
             )
+            # Prueba de vida: nui crea un steps-<stamp>-NN.log por paso ejecutado.
+            # Si no creo ninguno, el panel NO hizo nada (consola no disponible,
+            # panic, plan rechazado) -- y eso incluye el codigo 0, que es el
+            # sintoma real que se vio en maquina: "[OK] nui instalado" y vuelta al
+            # prompt sin un solo paso. Se cae al runner de texto, que es lento pero
+            # habla.
+            $after = @(Get-ChildItem -LiteralPath $LogDir -Filter 'steps-*' -File -ErrorAction SilentlyContinue |
+                    Select-Object -ExpandProperty Name)
+            $ranAny = @($after | Where-Object { $before -notcontains $_ }).Count -gt 0
+            if (-not $ranAny) {
+                Write-UiWarn "el panel no ejecuto ningun paso (codigo $code); se continua en modo texto"
+                return (Invoke-DotfilesPanelPlain -Panel $Panel -PlanPath $planPath -LogDir $LogDir)
+            }
+            if ($code -ne 0) {
+                # Los pasos corrieron: solo se informa del codigo, reejecutar en
+                # texto duplicaria trabajo ya hecho.
+                Write-UiWarn "el panel termino con codigo $code; revisa los logs en $LogDir"
+            }
             return $code
         }
         return (Invoke-DotfilesPanelPlain -Panel $Panel -PlanPath $planPath -LogDir $LogDir)
@@ -1056,7 +1096,9 @@ function Invoke-DotfilesPanelPlain {
         $warned = $false
         if ($step['interactive']) {
             # Paso interactivo: hereda la consola (la salida NO se captura).
-            $code = Invoke-DotfilesNativeQuoted -Argv $argv
+            # -AttachConsole es imprescindible: sin el, el hijo arranca sin
+            # consola y cualquier prompt o `Read-Host` falla al instante.
+            $code = Invoke-DotfilesNativeQuoted -AttachConsole -Argv $argv
         } else {
             $code = Invoke-DotfilesNativeLogged -Argv $argv -LogFile $log
             $text = ''

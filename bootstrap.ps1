@@ -8,6 +8,7 @@
 #   pwsh -File bootstrap.ps1 -Only "OpenCode"    # solo pasos que coinciden
 #   pwsh -File bootstrap.ps1 -SkipGit            # omite identidad Git/SSH
 #   pwsh -File bootstrap.ps1 -MachineScope       # winget machine (una UAC)
+#   pwsh -File bootstrap.ps1 -Plain              # sin panel (texto, con todo)
 #
 # Equivalente de bootstrap.sh para Windows. Comparte con el flujo bash el
 # contrato de docs/STEPS.md: mismos pasos, mismas directivas, mismo plan JSON
@@ -30,12 +31,30 @@ param(
     [switch]$SkipGit,
     [switch]$MachineScope,
     [switch]$WithPowerShell7,
+    # -Plain fuerza el runner de texto (sin panel). Es la salida de emergencia
+    # cuando la consola no soporta la TUI: imprime todo y no pierde errores.
+    [switch]$Plain,
     [ValidateSet('fnm', 'node')][string]$NodeManager = 'fnm',
     [string]$Title
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+
+# Ningun fallo puede terminar en silencio: sin esto, un error no controlado en
+# `irm | iex` (o durante el import de los modulos) deja la consola limpia y
+# parece que el instalador "no hizo nada". Es lo primero del script y no usa
+# Write-Ui*: puede dispararse antes de que los modulos esten cargados.
+trap {
+    $msg = if ($_.Exception) { $_.Exception.Message } else { "$_" }
+    Write-Host ''
+    Write-Host "[ERROR] instalacion interrumpida: $msg" -ForegroundColor Red
+    if (Test-Path variable:Paths) {
+        Write-Host "        Log: $($Paths.LogDir)" -ForegroundColor DarkGray
+    }
+    Write-Host '        Reintenta con -Plain (o -Verbose) para ver la salida completa.' -ForegroundColor DarkGray
+    exit 1
+}
 
 # --- arranque --------------------------------------------------------------
 
@@ -61,6 +80,7 @@ if ($NoColor -or $env:NUI_NO_COLOR -eq '1') {
 }
 if ($NonInteractive) { $env:NUI_NONINTERACTIVE = '1' }
 if ($DryRun) { $env:NUI_DRY_RUN = '1' }
+if ($Plain) { $env:NUI_PLAIN = '1' }
 if ($Only) { $env:NUI_ONLY = $Only }
 $env:REPO_DIR = $RepoDir
 $env:OPENCODE_DIR = $Paths.OpenCodeDir
@@ -738,7 +758,8 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Verificacion final' -Option
     Update-DotfilesSessionPath
 
     function Test-BinPresent([string]$Label, [string]$Bin) {
-        $cmd = Get-Command $Bin -CommandType Application, ExternalScript -ErrorAction SilentlyContinue
+        $cmd = Get-Command $Bin -CommandType Application, ExternalScript -ErrorAction SilentlyContinue |
+            Select-Object -First 1
         if ($cmd) {
             Write-UiStepLog "$Label OK ($($cmd.Source))"
         } else {
@@ -830,7 +851,11 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Persistencia de entorno' -E
 
 $rc = 0
 try {
-    $rc = Invoke-DotfilesPanelRun -Panel $panel -DryRun:$DryRun -NonInteractive:$NonInteractive -LogDir $Paths.LogDir
+    $rc = Invoke-DotfilesPanelRun -Panel $panel -Plain:$Plain -DryRun:$DryRun -NonInteractive:$NonInteractive -LogDir $Paths.LogDir
+} catch {
+    Write-UiError "la ejecucion fallo: $($_.Exception.Message)"
+    Write-UiDim "Log: $($Paths.LogDir)"
+    $rc = 1
 } finally {
     $env:NUI_STATE_DIR = $null
 }

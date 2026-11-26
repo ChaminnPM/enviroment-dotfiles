@@ -243,6 +243,107 @@ Describe 'Citado de argumentos nativos' {
     }
 }
 
+Describe 'Resolucion de ejecutables' {
+    # Regresion: Get-Command devuelve TODAS las coincidencias del PATH. Si hay
+    # dos copias de una herramienta (curl de system32 + curl de scoop/conda),
+    # `.Source` era un array y ese array se colaba como FileName/argv: el
+    # instalador fallaba con "el termino 'C:\...\curl.exe C:\...\curl.exe' no se
+    # reconoce".
+    It 'elige UNA ruta cuando hay varias copias en el PATH' {
+        $sep = [IO.Path]::PathSeparator
+        $dirs = @('a', 'b') | ForEach-Object {
+            $d = Join-Path ([IO.Path]::GetTempPath()) ("exe-$_-" + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            $f = Join-Path $d 'df-curl.exe'
+            Set-Content -LiteralPath $f -Value '@echo off'
+            if (-not $IsWindows) { chmod +x $f }
+            $d
+        }
+        $prev = $env:PATH
+        try {
+            $env:PATH = (($dirs + $prev) -join $sep)
+            $one = Resolve-DotfilesExe -Name 'df-curl.exe'
+            $one | Should -BeOfType ([string])
+            @($one).Count | Should -Be 1
+            $self = Get-DotfilesSelfPwsh
+            $self | Should -BeOfType ([string])
+            @($self).Count | Should -Be 1
+        } finally {
+            $env:PATH = $prev
+            $dirs | ForEach-Object { Remove-Item -LiteralPath $_ -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
+Describe 'Get-DotfilesSelfPwsh y Resolve-DotfilesExe' {
+    # Regresion: con dos copias de una herramienta en el PATH, `Get-Command`
+    # devuelve un array y `(Get-Command x).Source` tambien. Ese array, al
+    # asignarse a [string], se une con espacios y el proceso hijo no arranca.
+    It 'devuelve UNA ruta aunque el PATH tenga varias copias' {
+        $sep = [IO.Path]::PathSeparator
+        $dirs = @(1, 2) | ForEach-Object {
+            $d = Join-Path ([IO.Path]::GetTempPath()) ('path-' + $_ + '-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            $f = Join-Path $d 'dfprobe.exe'
+            Set-Content -LiteralPath $f -Value '@echo off'
+            if (-not $IsWindows) { chmod +x $f }
+            $d
+        }
+        $prevPath = $env:PATH
+        try {
+            $env:PATH = (($dirs + $prevPath) -join $sep)
+            $r = Resolve-DotfilesExe -Name 'dfprobe.exe'
+            $r | Should -BeOfType ([string])
+            ($r -split ' ')[0] | Should -Be (Join-Path $dirs[0] 'dfprobe.exe')
+        } finally {
+            $env:PATH = $prevPath
+            $dirs | ForEach-Object { Remove-Item -LiteralPath $_ -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    It 'Get-DotfilesSelfPwsh devuelve una ruta suelta' {
+        $p = Get-DotfilesSelfPwsh
+        $p | Should -BeOfType ([string])
+        @($p).Count | Should -Be 1
+    }
+}
+
+Describe 'Aplanado de argv' {
+    # Regresion del instalador en maquina real: `(Get-Command curl.exe).Source`
+    # con dos copias en PATH es un array y al encajar en [string[]] se unia en un
+    # solo elemento ("ruta1 ruta2"), produciendo un ejecutable inexistente.
+    It 'un elemento array se reduce a su primer valor' {
+        $flat = ConvertTo-DotfilesArgv -Values @(@('C:\x\curl.exe', 'C:\y\curl.exe'), '-fsSL', 'http://z')
+        @($flat).Count | Should -Be 3
+        $flat[0] | Should -Be 'C:\x\curl.exe'
+        $flat[1] | Should -Be '-fsSL'
+        $flat[2] | Should -Be 'http://z'
+    }
+
+    It 'null y elementos vacios no generan argumentos fantasma' {
+        $flat = ConvertTo-DotfilesArgv -Values @('cmd', $null, @(), '-c')
+        @($flat) -join '|' | Should -Be 'cmd|-c'
+    }
+
+    It 'Invoke-DotfilesNative ejecuta con argv anidada' {
+        # La salida del hijo va a [Console]::Out (no al pipeline), asi que se
+        # comprueba el codigo: con el bug, el FileName era "ruta1 ruta2" y el
+        # proceso no arrancaba (CommandNotFound / 127).
+        $argv = if ($IsWindows) {
+            @(@('cmd.exe', 'cmd.exe'), '/c', 'exit 0')
+        } else {
+            @(@('/bin/sh', '/bin/sh'), '-c', 'exit 0')
+        }
+        (Invoke-DotfilesNative -Argv $argv) | Should -Be 0
+        $argvFail = if ($IsWindows) {
+            @(@('cmd.exe', 'cmd.exe'), '/c', 'exit 5')
+        } else {
+            @(@('/bin/sh', '/bin/sh'), '-c', 'exit 5')
+        }
+        (Invoke-DotfilesNative -Argv $argvFail) | Should -Be 5
+    }
+}
+
 Describe 'Copia de trees' {
     BeforeEach {
         $script:Sandbox = Join-Path ([IO.Path]::GetTempPath()) ('ct-' + [guid]::NewGuid().ToString('N'))

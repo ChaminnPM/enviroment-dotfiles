@@ -64,7 +64,7 @@ Los mismos modificadores en las dos capas, con la sintaxis de cada shell:
 
 | Que hace | Linux / WSL | Windows |
 |---|---|---|
-| Muestra toda la salida (sin panel) | `--verbose` | `-Verbose` |
+| Muestra toda la salida (sin panel) | `--verbose` | `-Plain` (o `-Verbose`) |
 | Imprime el plan de pasos y no ejecuta | `--dry-run` | `-DryRun` |
 | Sin preguntas: defaults y modo texto | `--non-interactive` | `-NonInteractive` |
 | Desactiva el color | `--no-color` | `-NoColor` |
@@ -76,9 +76,9 @@ Los mismos modificadores en las dos capas, con la sintaxis de cada shell:
 | Rama o tag del repo | `REPO_REF=<ref>` | `-Ref <ref>` |
 
 Con `irm | iex` no se pueden pasar banderas: usa las variables de entorno
-`NUI_DRY_RUN=1`, `NUI_NONINTERACTIVE=1`, `NUI_NO_COLOR=1`, `NUI_ONLY`, `VERBOSE=1`,
-`SKIP_GIT_IDENTITY=1`, `REPO_REF`, `DOTFILES_NODE_MANAGER` y
-`DOTFILES_MACHINE_SCOPE=1`, que hacen lo mismo.
+`NUI_DRY_RUN=1`, `NUI_NONINTERACTIVE=1`, `NUI_PLAIN=1`, `NUI_NO_COLOR=1`,
+`NUI_ONLY`, `VERBOSE=1`, `SKIP_GIT_IDENTITY=1`, `REPO_REF`,
+`DOTFILES_NODE_MANAGER` y `DOTFILES_MACHINE_SCOPE=1`, que hacen lo mismo.
 
 Ejemplos:
 

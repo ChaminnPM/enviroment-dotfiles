@@ -78,7 +78,7 @@ if ($dir -and -not (Test-Path -LiteralPath $dir)) {
 # gofmt alinea las constantes; sin esto `gofmt -l` fallaria en CI.
 $gofmt = $null
 foreach ($cand in @('gofmt', "$env:LOCALAPPDATA\Programs\Go\bin\gofmt.exe", 'C:\Program Files\Go\bin\gofmt.exe')) {
-    $cmd = Get-Command $cand -ErrorAction SilentlyContinue
+    $cmd = Get-Command $cand -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { $gofmt = $cmd.Source; break }
     if (Test-Path -LiteralPath $cand -ErrorAction SilentlyContinue) { $gofmt = $cand; break }
 }

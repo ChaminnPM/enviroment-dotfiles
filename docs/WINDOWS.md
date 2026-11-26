@@ -102,7 +102,17 @@ sola UAC) en lugar de instalar por usuario.
 en `bin/SHA256SUMS` y el instalador lo verifica antes de ejecutarlo.
 
 **El panel se ve como texto plano.** Consola legacy sin VT o terminal menor de
-64x14. Usa Windows Terminal o fuerza el modo texto con `-Verbose`.
+64x14. Usa Windows Terminal o fuerza el modo texto con `-Plain`.
+
+**El instalador termina sin mostrar el panel ni los pasos.** La TUI necesita una
+consola real; en consolas embebidas (por ejemplo el terminal de un IDE) puede
+arrancar sin ella. Relanza con `-Plain` (o `NUI_PLAIN=1`) para ver el runner de
+texto completo; si el panel falla, el instalador ya cae solo a texto.
+
+**Decenas de lineas de `icacls ... No se efectuo ninguna asignacion`.** Version
+antigua del instalador que concedia permisos por nombre de cuenta. Actualiza el
+repo y relanza: las ACL se aplican por SID (no dependen del idioma ni del nombre
+del equipo) y, si fallan, se avisa una sola vez.
 
 **`ssh -T git@github.com` dice "Host key verification failed".** Falta el
 `known_hosts` pinnado: relanza `bootstrap.ps1` o

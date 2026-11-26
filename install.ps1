@@ -14,6 +14,7 @@
 #   -NonInteractive / $env:NUI_NONINTERACTIVE=1
 #   -NoColor / $env:NUI_NO_COLOR=1
 #   -SkipGit / $env:SKIP_GIT_IDENTITY=1
+#   -Plain / $env:NUI_PLAIN=1            sin panel: texto con toda la salida
 #   -Only <texto> / $env:NUI_ONLY
 #   -MachineScope / $env:DOTFILES_MACHINE_SCOPE=1
 #   -WithPowerShell7 / $env:DOTFILES_WITH_PS7=1
@@ -37,6 +38,7 @@ param(
     [switch]$SkipGit,
     [switch]$MachineScope,
     [switch]$WithPowerShell7,
+    [switch]$Plain,
     [string]$NodeManager,
     [string]$Only,
     [string]$BaseUrl
@@ -98,6 +100,7 @@ if ($NoColor) { $env:NUI_NO_COLOR = '1'; $env:NO_COLOR = '1' }
 if ($SkipGit) { $env:SKIP_GIT_IDENTITY = '1' }
 if ($MachineScope) { $env:DOTFILES_MACHINE_SCOPE = '1' }
 if ($WithPowerShell7) { $env:DOTFILES_WITH_PS7 = '1' }
+if ($Plain) { $env:NUI_PLAIN = '1' }
 if ($env:SKIP_GIT_IDENTITY -eq '1') { $SkipGit = $true }
 if ($Only) { $env:NUI_ONLY = $Only }
 
@@ -205,6 +208,7 @@ try {
     if ($SkipGit) { $bootArgs += '-SkipGit' }
     if ($MachineScope) { $bootArgs += '-MachineScope' }
     if ($WithPowerShell7) { $bootArgs += '-WithPowerShell7' }
+    if ($Plain) { $bootArgs += '-Plain' }
     if ($NodeManager) { $bootArgs += @('-NodeManager', $NodeManager) }
     if ($onlyVal) { $bootArgs += @('-Only', $onlyVal) }
 

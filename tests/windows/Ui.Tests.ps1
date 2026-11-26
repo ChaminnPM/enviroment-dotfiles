@@ -112,6 +112,120 @@ Describe 'Invoke-DotfilesLoggedArgv' {
     }
 }
 
+Describe 'Invoke-DotfilesPanelRun -Plain' {
+    BeforeAll {
+        $script:PlainLog = Join-Path $script:Sandbox 'plain-logs'
+        New-Item -ItemType Directory -Force -Path $script:PlainLog | Out-Null
+    }
+
+    It 'ejecuta los pasos en texto y devuelve 0' {
+        $p = New-DotfilesPanel -Title 'plain'
+        $p = Add-DotfilesPanelStep -Panel $p -Title 'Paso texto' -Body {
+            Write-DotfilesMessage -Level info -Text 'hola-plain'
+        }
+        $all = @(Invoke-DotfilesPanelRun -Panel $p -Plain -LogDir $script:PlainLog 6>&1)
+        $rc = $all[-1]
+        $text = (@($all | Select-Object -SkipLast 1) | ForEach-Object { "$_" }) -join "`n"
+        $rc | Should -Be 0
+        $text | Should -BeLike '*Paso texto*'
+        $text | Should -BeLike '*hola-plain*'
+        $text | Should -BeLike '*REPORTE FINAL*'
+    }
+
+    It 'devuelve 1 cuando un paso obligatorio falla' {
+        $p = New-DotfilesPanel -Title 'plain-fail'
+        $p = Add-DotfilesPanelStep -Panel $p -Title 'Falla' -Body { exit 7 }
+        $rc = Invoke-DotfilesPanelRun -Panel $p -Plain -LogDir $script:PlainLog 6>$null
+        $rc | Should -Be 1
+        (Get-DotfilesReport).err.Count | Should -BeGreaterThan 0
+    }
+
+    It 'un paso opcional que falla no aborta el resto' {
+        $p = New-DotfilesPanel -Title 'plain-opt'
+        $p = Add-DotfilesPanelStep -Panel $p -Title 'Opcional' -Optional -Body { exit 5 }
+        $p = Add-DotfilesPanelStep -Panel $p -Title 'Siguiente' -Body { Write-Output 'sigo' }
+        $rc = Invoke-DotfilesPanelRun -Panel $p -Plain -LogDir $script:PlainLog 6>$null
+        $rc | Should -Be 0
+        (Get-DotfilesReport).ok | Should -Contain 'Siguiente'
+    }
+
+    It 'con -NonInteractive aplica los defaults y escribe el result file' {
+        $env:NUI_NONINTERACTIVE = '1'
+        try {
+            $p = New-DotfilesPanel -Title 'plain-inputs'
+            $p = Add-DotfilesPanelInput -Panel $p -Type input -Name 'extras' -Prompt 'Extras' -Default 'sin-extras'
+            $p = Add-DotfilesPanelStep -Panel $p -Title 'Usa default' -Body {
+                Write-Output "extras=$extras"
+            }
+            $all = @(Invoke-DotfilesPanelRun -Panel $p -Plain -NonInteractive -LogDir $script:PlainLog 6>&1)
+            $rc = $all[-1]
+            $text = (@($all | Select-Object -SkipLast 1) | ForEach-Object { "$_" }) -join "`n"
+            $rc | Should -Be 0
+            $text | Should -BeLike '*extras=sin-extras*'
+        } finally {
+            Remove-Item env:NUI_NONINTERACTIVE -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'NUI_PLAIN=1 tambien fuerza el runner de texto' {
+        $env:NUI_PLAIN = '1'
+        try {
+            $p = New-DotfilesPanel -Title 'plain-env'
+            $p = Add-DotfilesPanelStep -Panel $p -Title 'Texto por env' -Body { Write-Output 'por-env' }
+            $all = @(Invoke-DotfilesPanelRun -Panel $p -LogDir $script:PlainLog 6>&1)
+            $text = (@($all | Select-Object -SkipLast 1) | ForEach-Object { "$_" }) -join "`n"
+            $text | Should -BeLike '*por-env*'
+        } finally {
+            Remove-Item env:NUI_PLAIN -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'un panel que no ejecuta nada cae al runner de texto' -Skip:(-not [Environment]::UserInteractive) {
+        # Regresion del fallo real en maquina: nui volvia sin crear un solo log de
+        # paso (consola no adjunta) y el instalador parecia no haber hecho nada.
+        # El detector es "el panel no dejo log de paso", y se prueba con un nui
+        # de juguete. En Windows el falso es un .cmd, que ProcessStartInfo no
+        # puede lanzar: ahi se comprueba la misma salida (trabajo no hecho ->
+        # runner de texto), no el codigo 0 del panel.
+        $fake = Join-Path $script:Sandbox 'fake-nui'
+        if ($IsWindows) {
+            $fake = "$fake.cmd"
+            # `fake-nui version` -> version soportada; `steps run` -> no hace nada.
+            $body = @(
+                '@echo off',
+                'if "%1"=="version" echo nui 9.9.9',
+                'exit /b 0'
+            ) -join "`r`n"
+            Set-Content -LiteralPath $fake -Value $body -Encoding ascii
+        } else {
+            $body = "#!/bin/sh`ncase `"`$1`" in`n  version) echo 'nui 9.9.9' ;;`nesac`nexit 0`n"
+            Set-Content -LiteralPath $fake -Value $body
+            chmod +x $fake
+        }
+        $prevUi = $env:UI_BIN
+        $prevPlain = $env:NUI_PLAIN
+        try {
+            $env:UI_BIN = $fake
+            Remove-Item env:NUI_PLAIN -ErrorAction SilentlyContinue
+            (Get-DotfilesUiBin) | Should -Be $fake
+            (Get-DotfilesUiVersion) | Should -Be '9.9.9'
+            $p = New-DotfilesPanel -Title 'panel-mudo'
+            $p = Add-DotfilesPanelStep -Panel $p -Title 'Paso rescatado' -Body {
+                Write-DotfilesMessage -Level info -Text 'ejecutado-en-texto'
+            }
+            $all = @(Invoke-DotfilesPanelRun -Panel $p -LogDir $script:PlainLog 6>&1)
+            $rc = $all[-1]
+            $text = (@($all | Select-Object -SkipLast 1) | ForEach-Object { "$_" }) -join "`n"
+            $rc | Should -Be 0
+            $text | Should -BeLike '*se continua en modo texto*'
+            $text | Should -BeLike '*ejecutado-en-texto*'
+        } finally {
+            $env:UI_BIN = $prevUi
+            if ($prevPlain) { $env:NUI_PLAIN = $prevPlain }
+        }
+    }
+}
+
 Describe 'Mensajes y directivas' {
     It 'dentro de un paso emite directivas, fuera no' {
         $env:NUI_PANEL = '1'

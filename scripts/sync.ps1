@@ -39,6 +39,11 @@ Import-Module (Join-Path $LibDir 'theme.psm1') -Force
 Import-Module (Join-Path $LibDir 'packages.psm1') -Force
 Import-Module (Join-Path $LibDir 'doctor.psm1') -Force
 
+# Se guardan los valores previos para restaurarlos al salir: sync.ps1 se puede
+# invocar con `&` desde otra sesion y -DryRun no debe dejar la bandera pegada
+# (el siguiente comando se saltaria la ejecucion real sin avisar).
+$prevDryRun = $env:NUI_DRY_RUN
+$prevDelete = $env:SYNC_DELETE
 if ($DryRun) { $env:NUI_DRY_RUN = '1' }
 if ($Delete) { $env:SYNC_DELETE = '1' }
 $Paths = Get-DotfilesPaths
@@ -168,4 +173,6 @@ try {
 } finally {
     if ($Ephemeral -and $cloneDir) { Remove-DotfilesTree -Path $cloneDir }
     if ($Mode -ne 'doctor') { Clear-DotfilesRunMarker }
+    $env:NUI_DRY_RUN = $prevDryRun
+    $env:SYNC_DELETE = $prevDelete
 }

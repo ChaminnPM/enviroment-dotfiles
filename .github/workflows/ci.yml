@@ -361,10 +361,55 @@ jobs:
           $c = New-PesterConfiguration
           $c.Run.Path = './tests/windows'
           $c.Output.Verbosity = 'Detailed'
-          $c.Run.Exit = $true
+          # Sin Run.Exit: hace falta el objeto resultado para publicar el
+          # resumen y para poder diagnosticar el fallo sin pedir el log crudo.
+          $c.Run.Exit = $false
           $c.TestResult.Enabled = $true
           $c.TestResult.OutputPath = Join-Path $env:RUNNER_TEMP 'pester.xml'
-          Invoke-Pester -Configuration $c
+          $r = Invoke-Pester -Configuration $c
+          if ($env:GITHUB_STEP_SUMMARY) {
+              $lines = @(
+                  '### Pester (Windows)',
+                  '',
+                  "- Total: $($r.TotalCount)",
+                  "- Pasados: $($r.PassedCount)",
+                  "- Fallidos: $($r.FailedCount)",
+                  "- Omitidos: $($r.SkippedCount)"
+              )
+              if ($r.FailedCount -gt 0) {
+                  $lines += ''
+                  $lines += '| Test | Error |'
+                  $lines += '| --- | --- |'
+                  foreach ($t in @($r.Failed | Select-Object -First 25)) {
+                      $msg = (@($t.ErrorRecord | ForEach-Object { "$($_.Exception.Message)" }) -join ' ').Replace('|', '\|')
+                      $lines += "| $($t.ExpandedPath) | $msg |"
+                  }
+              }
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($lines -join "`n")
+          }
+          if ($r.FailedCount -gt 0) { throw "$($r.FailedCount) tests de Pester fallaron" }
+
+      - name: bootstrap.ps1 -NonInteractive ejecuta un paso real
+        shell: pwsh
+        run: |
+          # El resto de pasos solo miran el plan (DryRun). Este ejecuta el
+          # runner de texto de verdad, que es donde se rompio el instalador en
+          # una maquina real (panel sin consola = cero salida).
+          $ErrorActionPreference = 'Stop'
+          $home2 = Join-Path $env:RUNNER_TEMP ('run-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force -Path $home2 | Out-Null
+          $env:DOTFILES_HOME = $home2
+          $env:REPO_DIR = $PWD.Path
+          $out = & pwsh -NoProfile -File ./bootstrap.ps1 -NonInteractive -Only 'Requisitos del sistema' *>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          if ($rc -ne 0) { throw "bootstrap.ps1 real termino con codigo $rc" }
+          if ($out -notmatch 'Requisitos verificados') { throw 'el paso de requisitos no se ejecuto' }
+          # [OK] o [WARN]: en el runner de CI puede faltar winget y eso degrada el
+          # paso a aviso (correcto: un aviso no aborta la instalacion).
+          if ($out -notmatch '\[(OK|WARN)\]\s+Requisitos del sistema') { throw 'el reporte final no lista el paso' }
+          if ($out -notmatch '== REPORTE FINAL ==') { throw 'no se imprimio el reporte final' }
+          Write-Host 'bootstrap.ps1 -NonInteractive: paso real OK'
 
       - name: bootstrap.ps1 -DryRun produce un plan valido
         shell: pwsh

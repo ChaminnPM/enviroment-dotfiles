@@ -64,8 +64,11 @@ function Get-DotfilesFallback {
 function Test-DotfilesWinget {
     if (-not $script:WingetChecked) {
         $script:WingetChecked = $true
-        $cmd = Get-Command 'winget.exe' -CommandType Application -ErrorAction SilentlyContinue
-        if (-not $cmd) { $cmd = Get-Command 'winget' -CommandType Application -ErrorAction SilentlyContinue }
+        # -First 1: puede haber dos winget (el App Execution Alias de
+        # WindowsApps y el de Program Files); .Source sobre el array devuelve un
+        # array y la invocacion posterior se rompe.
+        $cmd = Get-Command 'winget.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $cmd) { $cmd = Get-Command 'winget' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 }
         $script:WingetAvailable = [bool]$cmd
         if ($script:WingetAvailable) {
             # Una version vieja (Win10 sin App Installer actualizado) puede no
