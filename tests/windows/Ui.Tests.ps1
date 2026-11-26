@@ -89,17 +89,21 @@ Describe 'Invoke-DotfilesLoggedArgv' {
         Initialize-DotfilesUi -Paths $script:P
     }
 
-    It 'lanza un wrapper .cmd a traves de cmd.exe (Windows)' {
+    It 'ejecuta un .cmd con argumentos y conserva el codigo de salida' {
+        # Es el caso de `npm install --prefix <ruta con espacios>`: CreateProcess
+        # necesita la RUTA del .cmd (nombre suelto no resuelve) y el citado tiene
+        # que preservar argumentos con espacios y el exit code del script.
         $dir = Join-Path ([IO.Path]::GetTempPath()) ('wrap-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         $tool = Join-Path $dir 'df-tool.cmd'
-        Set-Content -LiteralPath $tool -Value "@echo off`r`necho salida-cmd`r`nexit /b 0"
+        Set-Content -LiteralPath $tool -Value "@echo off`r`necho ARG1=%~1`r`necho ARG2=%~2`r`nexit /b 7`r`n"
         try {
             if ($IsWindows) {
                 $log = Join-Path $dir 'wrap.log'
-                $code = Invoke-DotfilesNativeLogged -Argv @($tool) -LogFile $log
-                $code | Should -Be 0
-                (Get-DotfilesFileText -Path $log) | Should -BeLike '*salida-cmd*'
+                (Invoke-DotfilesNativeLogged -Argv @($tool, 'simple', 'con espacios') -LogFile $log) | Should -Be 7
+                $t = Get-DotfilesFileText -Path $log
+                $t | Should -BeLike '*ARG1=simple*'
+                $t | Should -BeLike '*ARG2=con espacios*'
             }
         } finally {
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue

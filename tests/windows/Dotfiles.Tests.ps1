@@ -316,34 +316,41 @@ Describe 'Get-DotfilesSelfPwsh y Resolve-DotfilesExe' {
     }
 }
 
-Describe 'Ejecucion de wrappers .cmd' {
-    # Regresion: CreateProcess solo lanza .exe. `npm` en Windows es npm.cmd, y
-    # los wrappers que el repo escribe son .cmd: lanzarlos directo daba
-    # Win32Exception y el paso (npm install en 'Restaurar configuracion', por
-    # ejemplo) moria sin mensaje.
-    It 'envuelve el .cmd en cmd.exe /c call y el proceso arranca' {
-        $dir = Join-Path ([IO.Path]::GetTempPath()) ('cmdwrap-' + [guid]::NewGuid().ToString('N'))
+Describe 'Resolucion del comando para CreateProcess' {
+    # Regresion real (runner de Windows): "An error occurred trying to start
+    # process 'npm' ... The system cannot find the file specified". CreateProcess
+    # no aplica PATHEXT, asi que un nombre suelto whose real file es .cmd (npm,
+    # npx, los wrappers del repo) no arrancaba y el paso moria sin ejecutar.
+    It 'resuelve un nombre suelto a su ruta completa' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('exeres-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        $tool = Join-Path $dir 'df-tool.cmd'
-        Set-Content -LiteralPath $tool -Value "@echo off`r`nexit /b 0"
+        Set-Content -LiteralPath (Join-Path $dir 'dftool.cmd') -Value "@echo off`r`nexit /b 0"
+        $prevPath = $env:PATH
         try {
-            $a = Get-DotfilesExecArgv -Argv @($tool, 'install')
+            $env:PATH = $dir + [IO.Path]::PathSeparator + $prevPath
+            $a = Get-DotfilesExecArgv -Argv @('dftool', 'install', '-g', 'x')
             if ($IsWindows) {
-                $a[0] | Should -Be 'cmd.exe'
-                ($a -join ' ') | Should -BeLike '* call *df-tool.cmd install'
-                (Invoke-DotfilesNativeQuoted -Argv @($tool)) | Should -Be 0
-                (Invoke-DotfilesNative -Argv @($tool)) | Should -Be 0
+                $a[0] | Should -Be (Join-Path $dir 'dftool.cmd')
+                ($a[1..($a.Count - 1)] -join ' ') | Should -Be 'install -g x'
             } else {
-                # Fuera de Windows no se toca nada (Test-DotfilesWindows es false).
-                $a | Should -Be @($tool, 'install')
+                # Fuera de Windows no se reescribe nada.
+                $a[0] | Should -Be 'dftool'
             }
+            # Rutas absolutas y nombres con extension se dejan intactos.
+            (Get-DotfilesExecArgv -Argv @('C:\x\tool.exe', '-a')) | Should -Be @('C:\x\tool.exe', '-a')
+            (Get-DotfilesExecArgv -Argv @((Join-Path $dir 'sub\tool.cmd'))) | Should -Be @(Join-Path $dir 'sub\tool.cmd')
         } finally {
+            $env:PATH = $prevPath
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
-    It 'un .exe o un nombre suelto no se envolven' {
-        (Get-DotfilesExecArgv -Argv @('C:\x\tool.exe', '-a')) | Should -Be @('C:\x\tool.exe', '-a')
+    It 'un argv con vacios legitimos no se rechaza en el binding' {
+        # ssh-keygen usa '-N ""': con [string[]] Mandatory el binding daba
+        # ParameterBindingValidationException y mataba el paso de identidad.
+        $a = Get-DotfilesExecArgv -Argv @('ssh-keygen', '-N', '')
+        @($a).Count | Should -Be 3
+        $a[2] | Should -Be ''
     }
 }
 

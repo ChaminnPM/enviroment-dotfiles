@@ -667,13 +667,17 @@ function ConvertTo-DotfilesArgv {
 
 # Get-DotfilesExecArgv: argv listo para CreateProcess.
 #
-# ProcessStartInfo/CreateProcess solo arrancan .exe. En Windows media
-# herramienta relevante es .cmd: npm, npx, yarn, y los wrappers que el propio
-# repo escribe (python3.cmd, sync-dotfiles.cmd). Llamarlos directo lanza
-# Win32Exception "%1 no es una aplicacion Win32 valida" y el paso muere sin
-# mensaje; por eso se envuelven en `cmd.exe /c call <ruta> <args...>`.
-# 'call' y no la ruta a secas: cmd /c con la primera comilla se come las comillas
-# del camino (C:\Program Files\nodejs\npm.cmd) y deja 'C:\Program' como comando.
+# CreateProcess NO aplica PATHEXT: con FileName='npm' (que en Windows es
+# npm.cmd) falla con "El sistema no puede encontrar el archivo especificado" y
+# el paso muere antes de ejecutar nada. Afecta a npm/npx/opencode y a los
+# wrappers que el propio instalador escribe (python3.cmd, sync-dotfiles.cmd).
+# Resolver el nombre contra el PATH deja FileName con la ruta completa, y un
+# .cmd con ruta SI se puede lanzar: verificado en maquina real, el codigo de
+# salida (7) y los argumentos con espacios llegan intactos.
+#
+# Se probo y descarto envolver en `cmd.exe /c call <ruta>`: los builders citan
+# cada argumento, cmd recibe `"/c" "call" "ruta"` y responde
+# '"call" no se reconoce como un comando interno' (codigo 1).
 function Get-DotfilesExecArgv {
     # AllowEmptyString: los argv legitimos traen vacios ('ssh-keygen -N ""'), y
     # un [string[]] Mandatory los rechazaria en el binding.
@@ -681,16 +685,13 @@ function Get-DotfilesExecArgv {
     if (-not $Argv -or $Argv.Count -lt 1 -or -not $Argv[0]) { return ,@($Argv) }
     if (-not (Test-DotfilesWindows)) { return ,@($Argv) }
     $head = $Argv[0]
-    $resolved = $head
-    if ($head -notmatch '[\\/]' -and $head -notmatch '\.\w+$') {
-        # Nombre suelto: resolver contra el PATH para ver la extension real.
-        $cmd = Get-Command $head -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($cmd) { $resolved = $cmd.Source }
-    }
-    if ($resolved -notmatch '(?i)\.(cmd|bat)$') { return ,@($Argv) }
+    if ($head -match '[\\/]') { return ,@($Argv) }             # ya es una ruta
+    if ($head -match '\.[A-Za-z0-9]+$') { return ,@($Argv) }   # ya trae extension
+    $cmd = Get-Command $head -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cmd -or -not $cmd.Source) { return ,@($Argv) }
     $tail = @()
     if ($Argv.Count -gt 1) { $tail = @($Argv[1..($Argv.Count - 1)]) }
-    return ,(@('cmd.exe', '/c', 'call', $resolved) + $tail)
+    return ,(@($cmd.Source) + $tail)
 }
 
 # Invoke-DotfilesNative ejecuta argv literal (nunca una cadena de shell) y
