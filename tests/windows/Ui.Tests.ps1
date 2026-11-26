@@ -89,6 +89,23 @@ Describe 'Invoke-DotfilesLoggedArgv' {
         Initialize-DotfilesUi -Paths $script:P
     }
 
+    It 'lanza un wrapper .cmd a traves de cmd.exe (Windows)' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('wrap-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $tool = Join-Path $dir 'df-tool.cmd'
+        Set-Content -LiteralPath $tool -Value "@echo off`r`necho salida-cmd`r`nexit /b 0"
+        try {
+            if ($IsWindows) {
+                $log = Join-Path $dir 'wrap.log'
+                $code = Invoke-DotfilesNativeLogged -Argv @($tool) -LogFile $log
+                $code | Should -Be 0
+                (Get-DotfilesFileText -Path $log) | Should -BeLike '*salida-cmd*'
+            }
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'devuelve el codigo real y deja el log' {
         $cmd = if ($IsWindows) { 'cmd.exe' } else { '/bin/sh' }
         # cmd.exe necesita el echo DENTRO del comando: con `/c exit 3` no habria

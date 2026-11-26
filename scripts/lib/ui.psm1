@@ -543,7 +543,7 @@ function Invoke-DotfilesNativeLogged {
         [Parameter(Mandatory)][string]$LogFile,
         [int]$TimeoutSec = 0
     )
-    $Argv = ConvertTo-DotfilesArgv -Values $Argv
+    $Argv = Get-DotfilesExecArgv -Argv (ConvertTo-DotfilesArgv -Values $Argv)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Argv[0]
     for ($i = 1; $i -lt $Argv.Count; $i++) {

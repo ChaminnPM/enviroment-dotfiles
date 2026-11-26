@@ -316,6 +316,37 @@ Describe 'Get-DotfilesSelfPwsh y Resolve-DotfilesExe' {
     }
 }
 
+Describe 'Ejecucion de wrappers .cmd' {
+    # Regresion: CreateProcess solo lanza .exe. `npm` en Windows es npm.cmd, y
+    # los wrappers que el repo escribe son .cmd: lanzarlos directo daba
+    # Win32Exception y el paso (npm install en 'Restaurar configuracion', por
+    # ejemplo) moria sin mensaje.
+    It 'envuelve el .cmd en cmd.exe /c call y el proceso arranca' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('cmdwrap-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $tool = Join-Path $dir 'df-tool.cmd'
+        Set-Content -LiteralPath $tool -Value "@echo off`r`nexit /b 0"
+        try {
+            $a = Get-DotfilesExecArgv -Argv @($tool, 'install')
+            if ($IsWindows) {
+                $a[0] | Should -Be 'cmd.exe'
+                ($a -join ' ') | Should -BeLike '* call *df-tool.cmd install'
+                (Invoke-DotfilesNativeQuoted -Argv @($tool)) | Should -Be 0
+                (Invoke-DotfilesNative -Argv @($tool)) | Should -Be 0
+            } else {
+                # Fuera de Windows no se toca nada (Test-DotfilesWindows es false).
+                $a | Should -Be @($tool, 'install')
+            }
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'un .exe o un nombre suelto no se envolven' {
+        (Get-DotfilesExecArgv -Argv @('C:\x\tool.exe', '-a')) | Should -Be @('C:\x\tool.exe', '-a')
+    }
+}
+
 Describe 'Aplanado de argv' {
     # Regresion del instalador en maquina real: `(Get-Command curl.exe).Source`
     # con dos copias en PATH es un array y al encajar en [string[]] se unia en un

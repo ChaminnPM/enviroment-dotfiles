@@ -665,6 +665,34 @@ function ConvertTo-DotfilesArgv {
     return ,$out
 }
 
+# Get-DotfilesExecArgv: argv listo para CreateProcess.
+#
+# ProcessStartInfo/CreateProcess solo arrancan .exe. En Windows media
+# herramienta relevante es .cmd: npm, npx, yarn, y los wrappers que el propio
+# repo escribe (python3.cmd, sync-dotfiles.cmd). Llamarlos directo lanza
+# Win32Exception "%1 no es una aplicacion Win32 valida" y el paso muere sin
+# mensaje; por eso se envuelven en `cmd.exe /c call <ruta> <args...>`.
+# 'call' y no la ruta a secas: cmd /c con la primera comilla se come las comillas
+# del camino (C:\Program Files\nodejs\npm.cmd) y deja 'C:\Program' como comando.
+function Get-DotfilesExecArgv {
+    # AllowEmptyString: los argv legitimos traen vacios ('ssh-keygen -N ""'), y
+    # un [string[]] Mandatory los rechazaria en el binding.
+    param([AllowEmptyString()][AllowEmptyCollection()][AllowNull()][string[]]$Argv)
+    if (-not $Argv -or $Argv.Count -lt 1 -or -not $Argv[0]) { return ,@($Argv) }
+    if (-not (Test-DotfilesWindows)) { return ,@($Argv) }
+    $head = $Argv[0]
+    $resolved = $head
+    if ($head -notmatch '[\\/]' -and $head -notmatch '\.\w+$') {
+        # Nombre suelto: resolver contra el PATH para ver la extension real.
+        $cmd = Get-Command $head -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cmd) { $resolved = $cmd.Source }
+    }
+    if ($resolved -notmatch '(?i)\.(cmd|bat)$') { return ,@($Argv) }
+    $tail = @()
+    if ($Argv.Count -gt 1) { $tail = @($Argv[1..($Argv.Count - 1)]) }
+    return ,(@('cmd.exe', '/c', 'call', $resolved) + $tail)
+}
+
 # Invoke-DotfilesNative ejecuta argv literal (nunca una cadena de shell) y
 # devuelve el codigo de salida. La salida va directo al panel, que la loguea.
 function Invoke-DotfilesNative {
@@ -673,7 +701,7 @@ function Invoke-DotfilesNative {
         [int]$TimeoutSec = 0,
         [string]$WorkingDirectory
     )
-    $Argv = ConvertTo-DotfilesArgv -Values $Argv
+    $Argv = Get-DotfilesExecArgv -Argv (ConvertTo-DotfilesArgv -Values $Argv)
     if ($Argv.Count -lt 1 -or -not $Argv[0]) { throw 'Invoke-DotfilesNative: falta el comando' }
     $exe = $Argv[0]
     $tail = @()
@@ -782,7 +810,7 @@ function Invoke-DotfilesNativeQuoted {
         # pierden, asi que el panel "no hace nada" sin explicacion.
         [switch]$AttachConsole
     )
-    $Argv = ConvertTo-DotfilesArgv -Values $Argv
+    $Argv = Get-DotfilesExecArgv -Argv (ConvertTo-DotfilesArgv -Values $Argv)
     if ($Argv.Count -lt 1 -or -not $Argv[0]) { throw 'Invoke-DotfilesNativeQuoted: falta el comando' }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Argv[0]
