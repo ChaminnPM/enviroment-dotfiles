@@ -199,9 +199,14 @@ Describe 'Rutas y plataforma' {
     It 'Windows: todo el estado bajo ~/.config/enviroment-dotfiles' {
         $env:DOTFILES_PLATFORM_OVERRIDE = 'windows'
         $env:DOTFILES_HOME = 'C:/Users/Test'
+        # Join-DotfilesPath normaliza al separador de la plataforma: en Windows
+        # el home 'C:/Users/Test' se convierte en 'C:\Users\Test' para que no
+        # salgan rutas mixtas 'C:/Users\Test\.config'.
+        $sep = [IO.Path]::DirectorySeparatorChar
+        $want = "C:${sep}Users${sep}Test${sep}.config${sep}enviroment-dotfiles"
         try {
             $p = Get-DotfilesPaths
-            $p.Project | Should -Be 'C:/Users/Test/.config/enviroment-dotfiles'
+            $p.Project | Should -Be $want
             $p.EnvFile | Should -BeLike '*enviroment-dotfiles*env.ps1'
             $p.OpenCodeDir | Should -BeLike '*.config*opencode'
             $p.BinDir | Should -BeLike '*enviroment-dotfiles*bin*'
@@ -209,6 +214,7 @@ Describe 'Rutas y plataforma' {
             $p.FontDir | Should -BeLike '*Microsoft*Windows*Fonts*'
             $p.SshDir | Should -BeLike '*.ssh'
             $p.Project | Should -Not -BeLike '*//*'
+            $p.Project | Should -Not -BeLike '*\*'
         } finally {
             Remove-Item env:DOTFILES_HOME
         }

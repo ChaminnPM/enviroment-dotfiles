@@ -86,6 +86,12 @@ function Join-DotfilesPath {
     if (-not $Child) { return $Base }
     if (-not $Base) { return $Child }
     $sep = [IO.Path]::DirectorySeparatorChar
+    if ($sep -ne '/') {
+        # En Windows se normaliza TAMBIEN la base: un DOTFILES_HOME dado como
+        # 'C:/Users/Test' producia rutas mixtas ('C:/Users/Test\.config\...'),
+        # imposibles de comparar y ilegibles en los logs. En Linux es no-op.
+        $Base = $Base.Replace('/', $sep)
+    }
     # La child puede traer subdirectorios con '/' (formato del repo).
     $child = $Child.Replace('/', $sep)
     if ($Base.EndsWith([IO.Path]::DirectorySeparatorChar) -or $Base.EndsWith('/')) {
@@ -562,12 +568,19 @@ function Set-DotfilesPrivateAcl {
     if (-not $sid) { return $false }
     $inherit = if ($Kind -eq 'dir') { '(OI)(CI)(F)' } else { '(F)' }
     # Un solo /grant:r con los tres principals: es la forma documentada de
-    # icacls (reemplaza las concesiones previas y deja ACL = 3 lineas).
+    # icacls (reemplaza las concesiones previas y deja ACL = 3 lineas). El
+    # separador principal/derechos es DOS PUNTOS: sin ellos icacls sale con
+    # codigo != 0 y todas las ACL del instalador se caen (error visto en el
+    # runner de Windows: "*S-1-5-18(OI)(CI)(F)" no es un grant valido).
     $icaclsArgs = @($Path, '/inheritance:r', '/grant:r')
     foreach ($principal in @("*$sid", '*S-1-5-18', '*S-1-5-32-544')) {
-        $icaclsArgs += "$principal$inherit"
+        $icaclsArgs += "${principal}:${inherit}"
     }
     try {
+        # EAP local en 'Continue': en PowerShell 5.1/7.2 el stderr de un comando
+        # nativo con 'Stop' se convierte en excepcion, y icacls escribe avisos
+        # por stderr incluso cuando la ACL se aplico.
+        $ErrorActionPreference = 'Continue'
         # El mensaje de icacls (localizado) se guarda para Write-Verbose: si la
         # ACL falla, quien llama decide si avisar (Initialize-DotfilesUi lo
         # hace una sola vez, doctor por archivo).

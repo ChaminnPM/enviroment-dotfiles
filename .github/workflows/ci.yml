@@ -367,6 +367,13 @@ jobs:
           $c.TestResult.Enabled = $true
           $c.TestResult.OutputPath = Join-Path $env:RUNNER_TEMP 'pester.xml'
           $r = Invoke-Pester -Configuration $c
+          # Los mensajes de Pester van a stdout y el log crudo del job necesita
+          # permisos de admin para leerse. Cada fallo se repite como anotacion
+          # (`::error::`), que SI es legible por la API publica del check-run.
+          foreach ($t in @($r.Failed)) {
+              $msg = (@($t.ErrorRecord | ForEach-Object { "$($_.Exception.Message)" }) -join ' | ') -replace "[`r`n]+", ' '
+              Write-Host "::error::$($t.ExpandedPath) :: $msg"
+          }
           if ($env:GITHUB_STEP_SUMMARY) {
               $lines = @(
                   '### Pester (Windows)',

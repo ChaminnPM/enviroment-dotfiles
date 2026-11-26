@@ -91,7 +91,9 @@ Describe 'Invoke-DotfilesLoggedArgv' {
 
     It 'devuelve el codigo real y deja el log' {
         $cmd = if ($IsWindows) { 'cmd.exe' } else { '/bin/sh' }
-        $argv = if ($IsWindows) { @($cmd, '/c', 'exit 3') } else { @($cmd, '-c', 'echo hola; exit 3') }
+        # cmd.exe necesita el echo DENTRO del comando: con `/c exit 3` no habria
+        # nada que loguear y la comprobacion del log seria falsa.
+        $argv = if ($IsWindows) { @($cmd, '/c', 'echo hola & exit 3') } else { @($cmd, '-c', 'echo hola; exit 3') }
         $code = Invoke-DotfilesLoggedArgv -Title 'prueba' -Argv $argv 2>$null
         $code | Should -Be 3
         $log = Get-DotfilesLastLog
