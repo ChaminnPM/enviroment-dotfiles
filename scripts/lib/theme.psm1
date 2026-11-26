@@ -330,6 +330,9 @@ function Get-DotfilesWindowsTerminalScheme {
         if (Test-DotfilesKey -Map $scheme -Key 'name') { return $scheme }
     }
     # Fallback: se construye desde dracula.env si el fragmento no esta.
+    # Se respeta la paleta oficial de Dracula para terminal: el slot ANSI "blue"
+    # es el violeta (#bd93f9) y "purple" el rosa (#ff79c6). Antes faltaba "blue"
+    # y Windows Terminal rechazaba el colorScheme del perfil.
     return [ordered]@{
         name         = 'Dracula'
         background   = $Theme.THEME_BG
@@ -340,17 +343,44 @@ function Get-DotfilesWindowsTerminalScheme {
         red          = $Theme.THEME_RED
         green        = $Theme.THEME_GREEN
         yellow       = $Theme.THEME_YELLOW
-        purple       = $Theme.THEME_PURPLE
+        blue         = $Theme.THEME_PURPLE
+        purple       = $Theme.THEME_PINK
         cyan         = $Theme.THEME_CYAN
         white        = $Theme.THEME_FG
         brightBlack  = $Theme.THEME_BRIGHT_BLACK
         brightRed    = $Theme.THEME_BRIGHT_RED
         brightGreen  = $Theme.THEME_BRIGHT_GREEN
         brightYellow = $Theme.THEME_BRIGHT_YELLOW
+        brightBlue   = $Theme.THEME_BRIGHT_BLUE
         brightPurple = $Theme.THEME_BRIGHT_MAGENTA
         brightCyan   = $Theme.THEME_BRIGHT_CYAN
         brightWhite  = $Theme.THEME_BRIGHT_WHITE
     }
+}
+
+# Test-DotfilesWindowsTerminalScheme: el esquema trae TODO lo que Windows
+# Terminal exige?
+#
+# WT marca como invalido el colorScheme de un perfil si al esquema le falta
+# cualquiera de los 16 colores ANSI. Caso real: faltaba "blue" y al abrir la
+# terminal salia "Se encontraron errores al cargar la configuracion de usuario
+# ... 'colorScheme' no valido".
+function Test-DotfilesWindowsTerminalScheme {
+    param([Parameter(Mandatory)][AllowNull()]$Scheme)
+    $required = @(
+        'name', 'background', 'foreground', 'cursorColor', 'selectionBackground',
+        'black', 'red', 'green', 'yellow', 'blue', 'purple', 'cyan', 'white',
+        'brightBlack', 'brightRed', 'brightGreen', 'brightYellow',
+        'brightBlue', 'brightPurple', 'brightCyan', 'brightWhite'
+    )
+    foreach ($k in $required) {
+        if (-not (Test-DotfilesKey -Map $Scheme -Key $k)) { return $false }
+        # El esquema puede llegar como hashtable (fragmento) o como PSObject
+        # (ConvertFrom-Json del settings.json): no se puede indexar igual.
+        $v = if ($Scheme -is [System.Collections.IDictionary]) { $Scheme[$k] } else { $Scheme.PSObject.Properties[$k].Value }
+        if (-not "$v".Trim()) { return $false }
+    }
+    return $true
 }
 
 # Set-DotfilesWindowsTerminalTheme aplica esquema + fuente Nerd en los perfiles
@@ -373,6 +403,10 @@ function Set-DotfilesWindowsTerminalTheme {
     }
 
     $scheme = Get-DotfilesWindowsTerminalScheme -Theme $Theme
+    if (-not (Test-DotfilesWindowsTerminalScheme -Scheme $scheme)) {
+        # Mejor no tocar nada que dejar la terminal avisando en cada arranque.
+        return [pscustomobject]@{ ok = $false; skipped = $false; detail = 'el esquema Dracula esta incompleto (faltan colores ANSI); se deja settings.json sin tocar' }
+    }
     # Se reemplaza el esquema Dracula existente en vez de duplicarlo: relanzar
     # el instalador no debe acumular esquemas con el mismo nombre.
     $schemes = @()
@@ -398,6 +432,34 @@ function Set-DotfilesWindowsTerminalTheme {
     Backup-DotfilesFile -Path $settings | Out-Null
     $json = ConvertTo-DotfilesJsonC -Data $data
     Write-DotfilesFile -Path $settings -Content $json -Encoding 'utf8' | Out-Null
+
+    # Verificacion de ida y vuelta: un settings.json que WT no puede interpretar
+    # deja al usuario con un dialogo de error en cada arranque. Se relee y, si el
+    # esquema o el colorScheme no cuadran, se restaura el respaldo.
+    $check = ConvertFrom-DotfilesJsonC -Text (Get-DotfilesFileText -Path $settings)
+    $okCheck = $false
+    if ($check -and (Test-DotfilesKey -Map $check -Key 'schemes') -and (Test-DotfilesKey -Map $check -Key 'profiles')) {
+        $profiles = $check['profiles']
+        $mine = @(@($check['schemes']) | Where-Object {
+                (Test-DotfilesKey -Map $_ -Key 'name') -and $_['name'] -eq $scheme['name']
+            })
+        $cs = ''
+        if ((Test-DotfilesKey -Map $profiles -Key 'defaults')) {
+            $cs = $profiles['defaults']['colorScheme']
+        }
+        $okCheck = ($mine.Count -eq 1) -and ($cs -eq $scheme['name'])
+    }
+    if (-not $okCheck) {
+        $backup = Backup-DotfilesFile -Path $settings
+        if ($backup -and (Test-Path -LiteralPath $backup)) {
+            Copy-Item -LiteralPath $backup -Destination $settings -Force
+        }
+        return [pscustomobject]@{
+            ok      = $false
+            skipped = $false
+            detail  = "no se pudo dejar $settings valido para Windows Terminal; se restauro el respaldo"
+        }
+    }
     return [pscustomobject]@{ ok = $true; skipped = $false; detail = "Windows Terminal: esquema Dracula y fuente $($Theme.THEME_FONT_FAMILY) aplicados" }
 }
 
@@ -439,12 +501,13 @@ function ConvertTo-DotfilesJsonC {
 }
 
 function ConvertTo-DotfilesHashtable {
+    # Alias del conversor PROFUNDO de dotfiles.psm1. La version anterior solo
+    # convertia el primer nivel, asi que en PowerShell 5.1 (sin -AsHashtable) el
+    # JSON anidado quedaba mezclado: los elementos de "schemes" seguian siendo
+    # PSObject y `$_['name']` reventaba con "No se puede indizar en un objeto del
+    # tipo PSObject" al aplicar el tema de Windows Terminal.
     param([Parameter(ValueFromPipeline)]$InputObject)
-    process {
-        $ht = [ordered]@{}
-        foreach ($p in $InputObject.PSObject.Properties) { $ht[$p.Name] = $p.Value }
-        return $ht
-    }
+    process { return (ConvertTo-DotfilesHashtableDeep -InputObject $InputObject) }
 }
 
 function Remove-DotfilesJsonComments {

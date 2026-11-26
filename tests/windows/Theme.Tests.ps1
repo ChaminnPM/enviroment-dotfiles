@@ -136,6 +136,25 @@ Describe 'Esquema Dracula' {
         $s['brightGreen'] | Should -Be $t.THEME_BRIGHT_GREEN
         $s.Keys | Where-Object { $_ -like '$*' } | Should -BeNullOrEmpty
     }
+
+    It 'trae los 16 colores ANSI (Windows Terminal rechaza el colorScheme si falta uno)' {
+        # Caso real: faltaba "blue" y la terminal avisaba en cada arranque.
+        $t = Read-DotfilesTheme
+        $s = Get-DotfilesWindowsTerminalScheme -Theme $t
+        foreach ($k in @('black', 'red', 'green', 'yellow', 'blue', 'purple', 'cyan', 'white',
+                'brightBlack', 'brightRed', 'brightGreen', 'brightYellow',
+                'brightBlue', 'brightPurple', 'brightCyan', 'brightWhite')) {
+            $s[$k] | Should -Not -BeNullOrEmpty -Because "falta el color $k"
+        }
+        (Test-DotfilesWindowsTerminalScheme -Scheme $s) | Should -BeTrue
+    }
+
+    It 'detecta un esquema incompleto' {
+        $t = Read-DotfilesTheme
+        $s = Get-DotfilesWindowsTerminalScheme -Theme $t
+        $s.Remove('blue')
+        (Test-DotfilesWindowsTerminalScheme -Scheme $s) | Should -BeFalse
+    }
 }
 
 Describe 'Set-DotfilesWindowsTerminalTheme' {
@@ -199,6 +218,28 @@ Describe 'Set-DotfilesWindowsTerminalTheme' {
         @($d.schemes | Where-Object { $_.name -eq 'Dracula' }).Count | Should -Be 1
     }
 
+    It 'deja el colorScheme apuntando a un esquema completo' {
+        # La invariante que comprueba Windows Terminal al arrancar. El test
+        # escribe su propio settings.json para no depender del orden.
+        $settings = Join-Path $script:Pkg 'settings.json'
+        $orig = @'
+{
+  "profiles": { "defaults": { "colorScheme": "Campbell" }, "list": [] },
+  "schemes": []
+}
+'@
+        Set-Content -LiteralPath $settings -Value $orig
+        $t = Read-DotfilesTheme
+        $r = Set-DotfilesWindowsTerminalTheme -Theme $t
+        $r.ok | Should -BeTrue -Because $r.detail
+        $after = Remove-DotfilesJsonComments -Text (Get-DotfilesFileText -Path $settings)
+        $d = ConvertFrom-Json -InputObject $after
+        $cs = $d.profiles.defaults.colorScheme
+        $scheme = @($d.schemes | Where-Object { $_.name -eq $cs })
+        $scheme.Count | Should -Be 1
+        (Test-DotfilesWindowsTerminalScheme -Scheme $scheme[0]) | Should -BeTrue
+    }
+
     It 'no toca un settings.json que no se puede analizar' {
         $settings = Join-Path $script:Pkg 'settings.json'
         Set-Content -LiteralPath $settings -Value '{ roto "a":'
@@ -230,5 +271,30 @@ Describe 'Fuente Nerd Font (fuera de Windows)' {
         $r = Update-DotfilesNerdFont -Theme $t
         $r.skipped | Should -BeTrue
         $r.ok | Should -BeFalse
+    }
+}
+
+Describe 'Bloque del tema en el perfil' {
+    It 'no escribe propiedades de color invalidas de PSReadLine' {
+        # Caso real: el bloque incluia `Prompt = ...`, que PSReadLine no admite,
+        # y el perfil de PowerShell fallaba en cada arranque.
+        $home2 = Join-Path $script:Sandbox 'perfil'
+        New-Item -ItemType Directory -Force -Path $home2 | Out-Null
+        $prev = $env:DOTFILES_HOME
+        $env:DOTFILES_HOME = $home2
+        try {
+            $script = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path 'scripts/apply-theme.ps1'
+            $null = & $script *>&1
+            $txt = ''
+            foreach ($pf in @(Get-DotfilesProfilePaths)) {
+                if (Test-Path -LiteralPath $pf) { $txt += (Get-DotfilesFileText -Path $pf) }
+            }
+            $txt | Should -BeLike '*Set-PSReadLineOption*'
+            ($txt -match '(?m)^\s*Prompt\s*=') | Should -BeFalse
+            $txt | Should -BeLike '*Command*'
+            ($txt -match '(?m)^\s*try \{') | Should -BeTrue
+        } finally {
+            $env:DOTFILES_HOME = $prev
+        }
     }
 }

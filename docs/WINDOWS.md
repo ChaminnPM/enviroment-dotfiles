@@ -132,6 +132,16 @@ portables que winget deja en `%LOCALAPPDATA%\Microsoft\WinGet\Packages` sin
 crear shim en `WinGet\Links` (los anade al PATH de usuario). Si aun asi falta,
 abre una terminal nueva.
 
+**`Set-PSReadLineOption: 'Prompt' is not a valid color property` al abrir PowerShell.**
+Version antigua del bloque de tema: `Prompt` no es una propiedad de color de
+PSReadLine. Actualiza el repo y relanza el paso del tema.
+
+**Windows Terminal avisa "Se encontraron errores al cargar la configuracion de
+usuario" y habla de un `colorScheme` no valido.** Version antigua del esquema
+Dracula: le faltaba el color ANSI `blue` y Windows Terminal invalida el esquema
+entero. Actualiza el repo y relanza `-Only "Tema"` (hace respaldo de
+`settings.json` antes de tocarlo).
+
 **`ssh -T git@github.com` dice "Host key verification failed".** Falta el
 `known_hosts` pinnado: relanza `bootstrap.ps1` o
 `scripts/setup-git-identity.ps1`. Nunca se usa `ssh-keyscan`.

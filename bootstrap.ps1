@@ -740,7 +740,10 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'oh-my-posh' -Estimate 90 -B
         '    oh-my-posh init pwsh --config $poshConfig | Invoke-Expression',
         '    # PSReadLine con la paleta del tema (los colores del prompt no',
         '    # dependen del esquema del terminal).',
-        "    if (`$env:THEME_GREEN) { Set-PSReadLineOption -Colors @{ Command = `$env:THEME_GREEN; Parameter = `$env:THEME_ORANGE; String = `$env:THEME_YELLOW; Comment = `$env:THEME_COMMENT; Prompt = `$env:THEME_PURPLE } }",
+        # Sin "Prompt": no es una propiedad de color de PSReadLine y hacia que
+        # el perfil fallara al arrancar ('Prompt' is not a valid color property).
+        # try/catch para que una clave no soportada por otra version no rompa la shell.
+        "    if (`$env:THEME_GREEN) { try { Set-PSReadLineOption -Colors @{ Command = `$env:THEME_GREEN; Parameter = `$env:THEME_ORANGE; String = `$env:THEME_YELLOW; Comment = `$env:THEME_COMMENT } } catch { } }",
         '}'
     ) -join "`n"
     $r = Set-DotfilesProfileBlock -Kind 'posh' -Body $body
