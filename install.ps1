@@ -9,6 +9,7 @@
 # Opciones por bandera o por variable de entorno (necesario con `irm | iex`,
 # donde no se pueden pasar banderas):
 #   -Ref / $env:REPO_REF                 rama o tag (default main)
+#   -Verbose / $env:VERBOSE=1            salida completa, sin panel
 #   -DryRun / $env:NUI_DRY_RUN=1         imprime el plan y no ejecuta
 #   -NonInteractive / $env:NUI_NONINTERACTIVE=1
 #   -NoColor / $env:NUI_NO_COLOR=1
@@ -156,7 +157,10 @@ $rc = 1
 try {
     $zip = Join-Path $tmp 'repo.zip'
     Write-Step -Title 'Descargando repositorio (ZIP)...' -Body {
-        $curl = Get-Command 'curl.exe' -CommandType Application -ErrorAction SilentlyContinue
+        # -First 1: puede haber varios curl.exe en PATH (system32 + scoop/winget);
+        # Get-Command devuelve un array y `& $array` ejecutaria el segundo como
+        # argumento del primero.
+        $curl = Get-Command 'curl.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($curl) {
             # curl.exe viene con Windows 10 1803+ y maneja mejor proxies y
             # redirecciones largas que Invoke-WebRequest en 5.1.
@@ -194,6 +198,7 @@ try {
     Write-Host '>> Ejecutando bootstrap.ps1' -ForegroundColor DarkGray
     $self = (Get-Process -Id $PID -ErrorAction SilentlyContinue).Path
     $bootArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-RepoDir', $repo)
+    if ($PSBoundParameters['Verbose']) { $bootArgs += '-Verbose' }
     if ($DryRun) { $bootArgs += '-DryRun' }
     if ($NonInteractive) { $bootArgs += '-NonInteractive' }
     if ($NoColor) { $bootArgs += '-NoColor' }
