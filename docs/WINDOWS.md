@@ -127,8 +127,10 @@ Actualiza el repo: npm se ejecuta ahora con su directorio de trabajo en
 
 **Instale algo con winget y no aparece hasta abrir otra terminal.** Es el PATH:
 winget lo escribe en el registro y los procesos ya abiertos no lo ven. El
-instalador refresca la sesion tras instalar (y sondea `Program Files\Neovim\bin`
-si hace falta); si aun asi falta, abre una terminal nueva.
+instalador refresca la sesion tras instalar, y ademas localiza los paquetes
+portables que winget deja en `%LOCALAPPDATA%\Microsoft\WinGet\Packages` sin
+crear shim en `WinGet\Links` (los anade al PATH de usuario). Si aun asi falta,
+abre una terminal nueva.
 
 **`ssh -T git@github.com` dice "Host key verification failed".** Falta el
 `known_hosts` pinnado: relanza `bootstrap.ps1` o

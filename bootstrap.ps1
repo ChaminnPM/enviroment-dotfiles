@@ -206,12 +206,18 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Requisitos del sistema' -Es
 # --- 2. dependencias base --------------------------------------------------
 $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Dependencias base' -Estimate 90 -Body {
     $machine = $env:DOTFILES_MACHINE_SCOPE -eq '1'
+    # Releer el PATH del registro ANTES de decidir que falta: winget instala en
+    # %LOCALAPPDATA%\...\WinGet\Links y este proceso no lo ve hasta refrescar.
+    $null = Update-DotfilesSessionPath
     $missing = @()
     foreach ($pkg in Get-DotfilesPackageList -Section 'base') {
         if (-not $pkg) { continue }
         if ($pkg['scope'] -eq 'system') { continue }
         if ($pkg['optional'] -and $env:DOTFILES_WITH_PS7 -ne '1') { continue }
         if (Test-DotfilesPackageInstalled -Package $pkg) {
+            # Aunque ya este, hay que dejarla visible: winget pudo instalarla sin
+            # crear el shim (ver Find-DotfilesWingetTool).
+            Publish-DotfilesWingetTool -Command $pkg['command']
             Write-UiStepLog "$($pkg['key']) OK"
             continue
         }
@@ -419,6 +425,9 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Paquetes custom' -Estimate 
         exit 0
     }
     Write-UiStepLog ("seleccion: " + ($selected -join ', '))
+    # Igual que en 'Dependencias base': sin refrescar el PATH, lo ya instalado
+    # por winget parece ausente y se reinstala (o se cae al ZIP) en cada pasada.
+    $null = Update-DotfilesSessionPath
 
     $i = 0
     foreach ($key in $selected) {
@@ -434,6 +443,7 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Paquetes custom' -Estimate 
             continue
         }
         if (Test-DotfilesPackageInstalled -Package $pkg) {
+            Publish-DotfilesWingetTool -Command $pkg['command']
             Write-UiStepLog "$key OK ($($pkg['command']))"
             continue
         }

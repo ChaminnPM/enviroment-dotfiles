@@ -1162,6 +1162,7 @@ function Add-DotfilesUserBin {
 
         $x = Join-Path $tmp 'x'
         New-Item -ItemType Directory -Force -Path $x | Out-Null
+        $found = $null
         if ($arc -match '\.zip$') {
             $null = Expand-DotfilesZip -Zip $arc -Destination $x
         } elseif ($arc -match '\.tar\.gz$' -or $arc -match '\.tgz$') {
@@ -1228,6 +1229,12 @@ function Update-DotfilesSessionPath {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
     $combined = (@($machine, $user) | Where-Object { $_ }) -join ';'
+    # winget no siempre anade su carpeta de shims al PATH de usuario; sin ella
+    # lo instalado por winget "no aparece" hasta abrir otra terminal.
+    $links = (Get-DotfilesPaths).WingetLinks
+    if ($links -and (Test-Path -LiteralPath $links) -and $combined -notlike "*$links*") {
+        $combined = if ($combined) { "$combined;$links" } else { $links }
+    }
     if ($combined) { $env:Path = $combined }
     return $env:Path
 }

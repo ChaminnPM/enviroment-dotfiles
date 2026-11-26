@@ -27,6 +27,75 @@ $script:WingetChecked = $false
 $script:WingetAvailable = $false
 $script:WingetPath = $null
 $script:WingetVersion = ''
+$script:WingetToolCache = @{}
+
+# Find-DotfilesWingetTool: localiza el ejecutable de una herramienta instalada.
+#
+# winget puede dejar los paquetes portables en
+# %LOCALAPPDATA%\Microsoft\WinGet\Packages\<id>\... SIN crear el shim en
+# WinGet\Links (visto en una maquina real: Links vacio y fzf/bat/rg en Packages).
+# Entonces ni el PATH ni el enlace resuelven el comando, el instalador cree que
+# falta y lo reinstala en cada pasada (y acaba cayendo al ZIP). Aqui se busca
+# tambien en el arbol de Packages.
+function Find-DotfilesWingetTool {
+    param([Parameter(Mandatory)][string]$Name)
+    $key = $Name.ToLowerInvariant()
+    if ($script:WingetToolCache.ContainsKey($key)) { return $script:WingetToolCache[$key] }
+
+    $cmd = Get-Command $Name -CommandType Application, ExternalScript -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($cmd -and $cmd.Source) {
+        $script:WingetToolCache[$key] = $cmd.Source
+        return $cmd.Source
+    }
+
+    $paths = Get-DotfilesPaths
+    if (-not $paths.IsWindows) { return $null }
+    $local = $paths.LocalAppData
+    $roots = @(
+        (Join-Path $local 'Microsoft/WinGet/Links'),
+        (Join-Path $local 'Microsoft/WinGet/Packages')
+    )
+    foreach ($root in $roots) {
+        if (-not $root -or -not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        foreach ($n in @(($Name + '.exe'), $Name)) {
+            $direct = Join-Path $root $n
+            if (Test-Path -LiteralPath $direct -PathType Leaf) {
+                $script:WingetToolCache[$key] = $direct
+                return $direct
+            }
+            # Solo tiene sentido buscar dentro de Packages (un nivel por paquete).
+            if ($root -notlike '*Packages') { continue }
+            $hit = Get-ChildItem -LiteralPath $root -Recurse -Depth 5 -Filter $n -File -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($hit) {
+                $script:WingetToolCache[$key] = $hit.FullName
+                return $hit.FullName
+            }
+        }
+    }
+    return $null
+}
+
+# Publish-DotfilesWingetTool: deja visible una herramienta recien instalada.
+#
+# Si el ejecutable vive en un directorio que no esta en el PATH (caso tipico:
+# WinGet\Packages), se antepone a la sesion y se persiste en el PATH de usuario
+# para las terminales nuevas. Sin esto nvim/fzf "no quedan disponibles" hasta
+# que el usuario adivine la ruta.
+function Publish-DotfilesWingetTool {
+    param([AllowNull()][AllowEmptyString()][string]$Command)
+    if (-not $Command) { return }
+    $tool = Find-DotfilesWingetTool -Name $Command
+    if (-not $tool) { return }
+    $dir = Split-Path -Parent $tool
+    if (-not $dir) { return }
+    $inPath = @($env:Path -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ieq $dir.TrimEnd('\')) }).Count -gt 0
+    if (-not $inPath) {
+        $env:Path = "$dir;$env:Path"
+        $null = Add-DotfilesEnvPath -Dir $dir
+    }
+}
 
 function Get-DotfilesPackagesManifest {
     param([switch]$Reload)
@@ -171,18 +240,41 @@ function Add-DotfilesPackage {
         if (-not $MachineScope) { $wingetArgs += @('--scope', 'user') }
         # winget es MUY ruidoso: su salida va al log del paso, no al panel.
         $wgLog = New-DotfilesStepLog -Label 'winget'
-        $code = Invoke-DotfilesNativeLogged -Argv (@($script:WingetPath) + $wingetArgs) -LogFile $wgLog -TimeoutSec 900
+        $code = 1
+        try {
+            $code = Invoke-DotfilesNativeLogged -Argv (@($script:WingetPath) + $wingetArgs) -LogFile $wgLog -TimeoutSec 900
+        } catch {
+            $detail = "no se pudo lanzar winget: $($_.Exception.Message)"
+        }
         if ($code -eq 0) {
+            Publish-DotfilesWingetTool -Command $Package['command']
             return [pscustomobject]@{ ok = $true; method = 'winget'; detail = "$name instalado con winget" }
+        }
+        # winget devuelve codigo != 0 tambien cuando el paquete YA esta instalado
+        # y no hay actualizacion ("No available upgrade found"), cosa que pasa en
+        # cada relanzamiento. El estado real lo dice el comando, no el codigo.
+        if (Test-DotfilesPackageInstalled -Package $Package) {
+            Publish-DotfilesWingetTool -Command $Package['command']
+            return [pscustomobject]@{ ok = $true; method = 'winget'; detail = "$name ya estaba instalado (winget no vio actualizacion)" }
         }
         # Codigo 0x8A150060 (no hay version) u otros: se reintenta sin --scope.
         if (-not $MachineScope) {
-            $code2 = Invoke-DotfilesNativeLogged -Argv (@($script:WingetPath) + @(
-                        'install', '--id', $id, '-e',
-                        '--accept-package-agreements', '--accept-source-agreements',
-                        '--disable-interactivity', '--silent')) -LogFile $wgLog -TimeoutSec 900
+            $code2 = 1
+            try {
+                $code2 = Invoke-DotfilesNativeLogged -Argv (@($script:WingetPath) + @(
+                            'install', '--id', $id, '-e',
+                            '--accept-package-agreements', '--accept-source-agreements',
+                            '--disable-interactivity', '--silent')) -LogFile $wgLog -TimeoutSec 900
+            } catch {
+                $code2 = 1
+            }
             if ($code2 -eq 0) {
+                Publish-DotfilesWingetTool -Command $Package['command']
                 return [pscustomobject]@{ ok = $true; method = 'winget'; detail = "$name instalado con winget (machine)" }
+            }
+            if (Test-DotfilesPackageInstalled -Package $Package) {
+                Publish-DotfilesWingetTool -Command $Package['command']
+                return [pscustomobject]@{ ok = $true; method = 'winget'; detail = "$name instalado con winget (machine; sin actualizacion pendiente)" }
             }
             $detail = "winget fallo para $id (exit $code2)"
         } else {
@@ -193,12 +285,18 @@ function Add-DotfilesPackage {
     }
 
     if (Test-DotfilesKey -Map $Package -Key 'fallback') {
-        $fb = Get-DotfilesFallback -Package $Package
-        $bin = Add-DotfilesUserBin -Name $fb['name'] -Uri $fb['url'] -InnerPath $fb['inner'] -Sha256 $fb['sha256']
-        if ($bin) {
-            return [pscustomobject]@{ ok = $true; method = 'user-bin'; detail = "$name instalado en $bin" }
+        # Un fallback roto (red, zip raro, StrictMode) no puede tumbar el paso:
+        # antes un $found sin inicializar mataba 'Paquetes custom' entero.
+        try {
+            $fb = Get-DotfilesFallback -Package $Package
+            $bin = Add-DotfilesUserBin -Name $fb['name'] -Uri $fb['url'] -InnerPath $fb['inner'] -Sha256 $fb['sha256']
+            if ($bin) {
+                return [pscustomobject]@{ ok = $true; method = 'user-bin'; detail = "$name instalado en $bin" }
+            }
+            $detail += "; el fallback de $name tampoco funciono"
+        } catch {
+            $detail += "; el fallback de $name fallo: $($_.Exception.Message)"
         }
-        $detail += "; el fallback de $name tampoco funciono"
     }
 
     return [pscustomobject]@{ ok = $false; method = $method; detail = $detail }
@@ -280,16 +378,14 @@ function Add-DotfilesScript {
 function Test-DotfilesPackageInstalled {
     param([Parameter(Mandatory)]$Package)
     $cmd = $Package['command']
-    if ($cmd -and (Get-Command $cmd -CommandType Application, ExternalScript -ErrorAction SilentlyContinue)) {
-        return $true
-    }
+    if (-not $cmd) { return $false }
+    # PATH, WinGet\Links o el arbol WinGet\Packages (portables sin shim).
+    if (Find-DotfilesWingetTool -Name $cmd) { return $true }
     # binario propio en ~/.config/enviroment-dotfiles/bin (fallback portatil).
     $paths = Get-DotfilesPaths
-    if ($cmd) {
-        $ext = if (Test-DotfilesWindows) { '.exe' } else { '' }
-        foreach ($n in @(($cmd + $ext), $cmd)) {
-            if (Test-Path -LiteralPath (Join-Path $paths.BinDir $n)) { return $true }
-        }
+    $ext = if ($paths.IsWindows) { '.exe' } else { '' }
+    foreach ($n in @(($cmd + $ext), $cmd)) {
+        if (Test-Path -LiteralPath (Join-Path $paths.BinDir $n) -PathType Leaf) { return $true }
     }
     return $false
 }
