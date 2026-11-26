@@ -213,8 +213,10 @@ Describe 'Rutas y plataforma' {
             # Las unicas rutas fuera del arbol son las que impone el SO.
             $p.FontDir | Should -BeLike '*Microsoft*Windows*Fonts*'
             $p.SshDir | Should -BeLike '*.ssh'
-            $p.Project | Should -Not -BeLike '*//*'
-            $p.Project | Should -Not -BeLike '*\*'
+            # Sin separadores duplicados ('//' o '\\'): en Windows -like no usa
+            # backslash como escape, asi que el patron se arma con el separador
+            # de la plataforma.
+            $p.Project | Should -Not -BeLike ("*{0}{0}*" -f $sep)
         } finally {
             Remove-Item env:DOTFILES_HOME
         }

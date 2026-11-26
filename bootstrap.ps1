@@ -747,7 +747,13 @@ $panel = Add-DotfilesPanelStep -Panel $panel -Title 'herdr' -Estimate 60 -Body {
 # --- 16. wrappers -----------------------------------------------------------
 $panel = Add-DotfilesPanelStep -Panel $panel -Title 'Wrappers' -Estimate 15 -Body {
     $paths = Get-DotfilesPaths
-    Install-DotfilesSyncWrapper -Paths $paths
+    # El objeto de retorno se captura: si se deja en el pipeline, el panel pinta
+    # una tabla de formato de PowerShell en mitad del paso.
+    $w = Install-DotfilesSyncWrapper -Paths $paths
+    if (-not (Test-Path -LiteralPath $w.ps1) -or -not (Test-Path -LiteralPath $w.cmd)) {
+        Write-UiWarn 'faltan los wrappers sync-dotfiles.ps1 o sync-dotfiles.cmd'
+        exit 1
+    }
     "sync-dotfiles instalado en $($paths.BinDir)"
 }
 

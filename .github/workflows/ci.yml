@@ -361,6 +361,9 @@ jobs:
           $c = New-PesterConfiguration
           $c.Run.Path = './tests/windows'
           $c.Output.Verbosity = 'Detailed'
+          # PassThru: sin esto Invoke-Pester no devuelve el objeto de resultado y
+          # $r.Failed sale vacio (el resumen y las anotaciones no tendrian texto).
+          $c.Run.PassThru = $true
           # Sin Run.Exit: hace falta el objeto resultado para publicar el
           # resumen y para poder diagnosticar el fallo sin pedir el log crudo.
           $c.Run.Exit = $false
@@ -417,6 +420,29 @@ jobs:
           if ($out -notmatch '\[(OK|WARN)\]\s+Requisitos del sistema') { throw 'el reporte final no lista el paso' }
           if ($out -notmatch '== REPORTE FINAL ==') { throw 'no se imprimio el reporte final' }
           Write-Host 'bootstrap.ps1 -NonInteractive: paso real OK'
+
+      - name: bootstrap.ps1 -NonInteractive en Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          # El one-liner del README corre con `powershell`, o sea 5.1. Si algo
+          # solo funciona en pwsh 7, la maquina del usuario se queda sin
+          # instalador y CI no se entera. Este paso usa el runner de texto bajo
+          # 5.1 real.
+          # El filtro va en ASCII ('Wrappers'): el script inline se guarda y se
+          # lee con la codificacion de 5.1, y un acento mal leido daria cero
+          # pasos (que es justo el fallo que no queremos detectar mal).
+          $ErrorActionPreference = 'Stop'
+          $home2 = Join-Path $env:RUNNER_TEMP ('ps51-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force -Path $home2 | Out-Null
+          $env:DOTFILES_HOME = $home2
+          $env:REPO_DIR = $PWD.Path
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./bootstrap.ps1 -NonInteractive -Only 'Wrappers' *>&1 | Out-String
+          $rc = $LASTEXITCODE
+          Write-Host $out
+          if ($rc -ne 0) { throw "bootstrap.ps1 en 5.1 termino con codigo $rc" }
+          if ($out -notmatch 'sync-dotfiles instalado') { throw 'el paso de wrappers no se ejecuto en 5.1' }
+          if ($out -notmatch 'REPORTE FINAL') { throw '5.1 no imprimio el reporte final' }
+          Write-Host 'bootstrap.ps1 en Windows PowerShell 5.1: OK'
 
       - name: bootstrap.ps1 -DryRun produce un plan valido
         shell: pwsh

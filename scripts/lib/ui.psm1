@@ -144,9 +144,14 @@ function Get-DotfilesUiArch {
 function Get-DotfilesUiBinaryName {
     param([string]$Arch)
     if (-not $Arch) { $Arch = Get-DotfilesUiArch }
-    if (Test-DotfilesWindows) { return "nui-windows-$Arch.exe" }
+    # El nombre sigue a la PLATAFORMA (incluido DOTFILES_PLATFORM_OVERRIDE), no
+    # al runtime: con el override en 'windows' el arbol de rutas es el de
+    # Windows y el archivo publicado es nui-windows-amd64.exe.gz. Mirar el
+    # runtime daba 'nui-windows-amd64' (sin .exe), un nombre que no existe en
+    # bin/: el instalador despreciaba el repo local y caia a la red con 404.
     $os = Get-DotfilesPlatform
     if ($os -eq 'wsl') { $os = 'linux' }
+    if ($os -eq 'windows') { return "nui-windows-$Arch.exe" }
     return "nui-$os-$Arch"
 }
 
