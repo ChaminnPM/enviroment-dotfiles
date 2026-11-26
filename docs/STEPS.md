@@ -1,5 +1,9 @@
 # Contrato de pasos (bash <-> PowerShell <-> nui)
 
+Documento interno de mantenimiento: describe lo que comparten `bootstrap.sh`,
+`bootstrap.ps1` y `nui`. Para instalar el entorno, ver el
+[`README`](../README.md).
+
 Los instaladores de Linux/WSL (`bootstrap.sh`) y de Windows (`bootstrap.ps1`)
 comparten el mismo contrato con `nui`. Cambiar una de las tres columnas sin
 cambiar las otras rompe la UX, `--only` y la documentacion.
